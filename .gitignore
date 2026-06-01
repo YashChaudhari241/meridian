@@ -1,0 +1,4 @@
+.chrome-profile/
+.DS_Store
+node_modules/
+*.zip

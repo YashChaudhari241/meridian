@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="hdr">
+    <strong>Meridian</strong>
+    <span class="sub">Twitch chat on YouTube</span>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button class="tab" data-tab="general">General</button>
+    <button class="tab" data-tab="youtube">YouTube</button>
+    <button class="tab" data-tab="chat">Chat</button>
+    <button class="tab" data-tab="appearance">Appearance</button>
+    <button class="tab" data-tab="hotkeys">Hotkeys</button>
+  </div>
+
+  <!-- General -->
+  <section class="panel" data-tab="general">
+    <div id="status" class="card"></div>
+    <div class="card">
+      <label>Auth mode</label>
+      <select id="mode">
+        <option value="auto">Auto (use twitch.tv login if present)</option>
+        <option value="cookie">Use twitch.tv login only</option>
+        <option value="anonymous">Anonymous read-only</option>
+      </select>
+      <div class="hint">Log into twitch.tv in this browser to chat as your account. Otherwise the overlay is read-only.</div>
+    </div>
+  </section>
+
+  <!-- YouTube -->
+  <section class="panel" data-tab="youtube">
+    <div class="card">
+      <label class="row" style="gap:8px;">
+        <input id="boundToPlayer" type="checkbox" />
+        <span>Bind overlay to YouTube player</span>
+      </label>
+      <div class="hint">Keeps the chat inside the video player — position follows theater mode and fullscreen automatically.</div>
+    </div>
+    <div class="card">
+      <label>YouTube → Twitch mappings (one per line: <code>@yt_handle = twitch_channel</code>)</label>
+      <textarea id="mappings" rows="8" spellcheck="false" placeholder="@ESLCS = esl
+@LCSOfficial = lcs"></textarea>
+      <button id="saveMappings">Save mappings</button>
+      <span id="mappingsMsg" class="hint"></span>
+    </div>
+    <div class="hint">
+      The overlay reads the current video's channel handle (e.g. <code>@ESLCS</code>) and joins
+      the mapped Twitch channel automatically.
+    </div>
+  </section>
+
+  <!-- Chat -->
+  <section class="panel" data-tab="chat">
+    <div class="card">
+      <label>Chat delay (seconds)</label>
+      <div class="row">
+        <input id="delay" type="number" min="0" max="600" step="1" />
+        <button id="saveDelay">Save</button>
+      </div>
+      <div class="hint">Client-side queue. 0 = real-time. Also adjustable from the overlay header (− / +).</div>
+    </div>
+    <div class="card">
+      <label class="row" style="gap:8px;">
+        <input id="autoscroll" type="checkbox" />
+        <span>Autoscroll (pauses for 8s when you scroll)</span>
+      </label>
+    </div>
+    <div class="card">
+      <label>Update frequency (ms, batches renders — 0 = instant)</label>
+      <div class="row">
+        <input id="updateFreq" type="number" min="0" max="2000" step="50" />
+        <button id="saveUpdateFreq">Save</button>
+      </div>
+    </div>
+    <div class="card">
+      <label>Max messages kept in view</label>
+      <div class="row">
+        <input id="maxMessages" type="number" min="50" max="2000" step="50" />
+        <button id="saveMaxMessages">Save</button>
+      </div>
+    </div>
+    <div class="card">
+      <label class="row" style="gap:8px;">
+        <input id="hideDeleted" type="checkbox" />
+        <span>Hide deleted messages</span>
+      </label>
+      <div class="hint">When a moderator deletes a message or times out a user, remove it from the overlay (default: keep it dimmed).</div>
+    </div>
+    <div class="card">
+      <label>Blocked words (one per line; case-insensitive whole-word match)</label>
+      <textarea id="blockedWords" rows="6" spellcheck="false" placeholder="word1
+word2"></textarea>
+      <button id="saveBlockedWords">Save</button>
+      <span id="blockedWordsMsg" class="hint"></span>
+    </div>
+  </section>
+
+  <!-- Appearance -->
+  <section class="panel" data-tab="appearance">
+    <div class="card">
+      <label class="row" style="gap:8px;">
+        <input id="bgEnabled" type="checkbox" />
+        <span>Background color</span>
+      </label>
+      <label class="row" style="gap:8px;">
+        <input id="blurEnabled" type="checkbox" />
+        <span>Background blur</span>
+      </label>
+      <label class="row" style="gap:8px;">
+        <input id="shadowEnabled" type="checkbox" />
+        <span>Drop shadow</span>
+      </label>
+    </div>
+    <div class="card">
+      <label>Background opacity (<span id="opacityVal"></span>)</label>
+      <input id="opacity" type="range" min="0" max="100" step="1" />
+    </div>
+    <div class="card">
+      <label>Background blur radius (<span id="blurRadiusVal"></span>)</label>
+      <input id="blurRadius" type="range" min="0" max="20" step="1" />
+    </div>
+    <div class="card">
+      <label>Font size (px)</label>
+      <div class="row">
+        <input id="fontSize" type="number" min="10" max="24" step="1" />
+        <button id="saveFontSize">Save</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Hotkeys -->
+  <section class="panel" data-tab="hotkeys">
+    <div class="card">
+      <label>Toggle overlay</label>
+      <div class="row">
+        <input id="hotkeyToggle" placeholder="e.g. Alt+M (click then press combo)" readonly />
+        <button id="hotkeyCapture">Capture</button>
+        <button id="hotkeyClear" class="secondary">Clear</button>
+      </div>
+    </div>
+    <div class="card">
+      <label>Focus chat input</label>
+      <div class="row">
+        <input id="hotkeyFocusInput" placeholder="e.g. Alt+C (click then press combo)" readonly />
+        <button id="hotkeyFocusCapture">Capture</button>
+        <button id="hotkeyFocusClear" class="secondary">Clear</button>
+      </div>
+      <div class="hint">Modifiers required (Ctrl/Alt/Shift/Meta). Reveals the overlay if hidden.</div>
+    </div>
+  </section>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

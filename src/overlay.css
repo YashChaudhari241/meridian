@@ -1,0 +1,376 @@
+/* Parent container — fully transparent. Holds the bg layer (visible chat
+   background) and the bars/messages/grips (children, positioned absolutely). */
+.meridian-root {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  width: 340px;
+  height: 360px;
+  z-index: 2147483600;
+  --meridian-opacity: 0.55;
+  --meridian-font: 13px;
+  --meridian-header-h: 30px;
+  --meridian-input-h: 38px;
+  --meridian-blur: 6px;
+  color: #f1f1f1;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: var(--meridian-font);
+  background: transparent;
+  user-select: none;
+  border-radius: 8px;
+}
+.meridian-root.meridian-hidden { display: none; }
+
+/* Background — inset by the bars' heights when idle, leaving space above/below
+   for the bars to "live in" while hidden. On hover it expands to fill the
+   root, visually revealing the bars without them animating themselves. */
+.meridian-bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--meridian-header-h);
+  bottom: var(--meridian-input-h);
+  background: rgba(15, 15, 18, var(--meridian-opacity));
+  backdrop-filter: blur(var(--meridian-blur));
+  -webkit-backdrop-filter: blur(var(--meridian-blur));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  transition: top 140ms ease, bottom 140ms ease;
+  z-index: 0;
+  pointer-events: none;
+}
+.meridian-root:hover:not(.meridian-idle) .meridian-bg,
+.meridian-root:focus-within:not(.meridian-idle) .meridian-bg {
+  top: 0;
+  bottom: 0;
+}
+.meridian-root.meridian-dragging .meridian-bg { transition: none; }
+
+/* Appearance toggles. */
+.meridian-root.no-blur .meridian-bg {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.meridian-root.no-bg .meridian-bg { background: transparent; }
+.meridian-root.no-shadow .meridian-bg { box-shadow: none; }
+
+/* Bars — present at full size at top:0 / bottom:0. Toggled with `visibility`
+   so they don't slide, just appear/disappear as the bg expands/contracts. */
+.meridian-header,
+.meridian-input-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 2;
+  opacity: 0;
+}
+/* Children non-interactive while bars are hidden, so a stray click on the
+   invisible header drags the overlay instead of hitting a button. */
+.meridian-header > *,
+.meridian-input-wrap > * { pointer-events: none; }
+.meridian-header {
+  top: 0;
+  height: var(--meridian-header-h);
+  cursor: grab;
+  font-size: 12px;
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.meridian-header.dragging { cursor: grabbing; }
+.meridian-input-wrap {
+  bottom: 0;
+  height: var(--meridian-input-h);
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.meridian-root:hover:not(.meridian-idle) .meridian-header,
+.meridian-root:focus-within:not(.meridian-idle) .meridian-header,
+.meridian-root:hover:not(.meridian-idle) .meridian-input-wrap,
+.meridian-root:focus-within:not(.meridian-idle) .meridian-input-wrap {
+  opacity: 1;
+}
+.meridian-root:hover:not(.meridian-idle) .meridian-header > *,
+.meridian-root:focus-within:not(.meridian-idle) .meridian-header > *,
+.meridian-root:hover:not(.meridian-idle) .meridian-input-wrap > *,
+.meridian-root:focus-within:not(.meridian-idle) .meridian-input-wrap > * {
+  pointer-events: auto;
+}
+
+/* Channel field. */
+.meridian-channel-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  padding: 0 4px 0 6px;
+  min-width: 0;
+}
+.meridian-channel-prefix { font-size: 11px; opacity: 0.6; flex: none; }
+.meridian-channel {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  padding: 3px 2px;
+}
+.meridian-channel:focus { color: #fff; }
+.meridian-channel-reset {
+  background: transparent;
+  border: none;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.meridian-channel-reset:hover { color: #fff; }
+.meridian-channel-reset[hidden] { display: none; }
+
+.meridian-delay {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 999px;
+  padding: 1px 4px;
+  flex: none;
+}
+.meridian-delay-icon { font-size: 11px; opacity: 0.7; padding: 0 2px; }
+.meridian-delay-val {
+  font-size: 11px;
+  width: 32px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font-family: inherit;
+  padding: 0;
+}
+.meridian-delay-val:focus { color: #fff; }
+
+.meridian-btn {
+  background: transparent;
+  border: none;
+  color: #ddd;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1;
+  flex: none;
+}
+.meridian-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+.meridian-status {
+  position: absolute;
+  top: calc(var(--meridian-header-h) + 2px);
+  left: 8px;
+  font-size: 10px;
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: 1;
+}
+.meridian-status:empty { display: none; }
+
+/* Messages — fills the middle, between the (always-present) bars. */
+.meridian-messages {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--meridian-header-h);
+  bottom: var(--meridian-input-h);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 8px;
+  box-sizing: border-box;
+  user-select: text;
+  z-index: 1;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 180ms ease;
+}
+.meridian-messages.scrolling { scrollbar-color: rgba(255,255,255,0.25) transparent; }
+.meridian-messages::-webkit-scrollbar { width: 6px; background: transparent; }
+.meridian-messages::-webkit-scrollbar-track { background: transparent; }
+.meridian-messages::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+  transition: background 180ms ease;
+}
+.meridian-messages.scrolling::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); }
+
+.meridian-msg {
+  padding: 2px 0;
+  line-height: 1.35;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.meridian-msg.notice { opacity: 0.75; font-style: italic; }
+.meridian-name { font-weight: 700; }
+.meridian-msg.self .meridian-name {
+  background: #ffffff;
+  color: #15151a;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.meridian-sep { opacity: 0.6; margin: 0 4px; }
+.meridian-msg.self .meridian-sep { display: none; }
+.meridian-msg.self .meridian-text { margin-left: 6px; }
+
+.meridian-emote-wrap {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+.meridian-emote-wrap::after {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(20, 20, 24, 0.96);
+  color: #fff;
+  font-size: 11px;
+  font-family: system-ui, sans-serif;
+  font-weight: 500;
+  padding: 3px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 80ms ease;
+  z-index: 10;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+.meridian-emote-wrap:hover::after { opacity: 1; }
+.meridian-emote {
+  display: inline-block;
+  vertical-align: middle;
+  height: 1.6em;
+  margin: -3px 1px;
+}
+.meridian-emote-name {
+  position: absolute;
+  left: 0; top: 0;
+  width: 1px; height: 1px;
+  font-size: 0;
+  color: transparent;
+  pointer-events: none;
+  user-select: text;
+  white-space: pre;
+}
+
+.meridian-input {
+  flex: 1;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #fff;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font: inherit;
+  outline: none;
+  user-select: text;
+  min-width: 0;
+}
+.meridian-input:focus { border-color: rgba(255,255,255,0.3); }
+.meridian-input:disabled { opacity: 0.5; }
+.meridian-send {
+  background: #9146ff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 8px;
+  cursor: pointer;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.meridian-send svg { display: block; }
+.meridian-send:hover { background: #a970ff; }
+.meridian-send:disabled { opacity: 0.5; cursor: default; }
+
+.meridian-suggest {
+  position: absolute;
+  bottom: calc(var(--meridian-input-h) + 4px);
+  left: 8px;
+  right: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: rgba(20, 20, 24, 0.98);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  z-index: 3;
+  display: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+.meridian-suggest.open { display: block; }
+.meridian-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.meridian-suggest-item.selected,
+.meridian-suggest-item:hover { background: rgba(145, 70, 255, 0.3); }
+.meridian-suggest-item img { height: 1.6em; }
+.meridian-suggest-item .prov { margin-left: auto; opacity: 0.5; font-size: 10px; }
+
+.meridian-resize {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  z-index: 5;
+  background: transparent;
+}
+.meridian-resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
+.meridian-resize-sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.meridian-resize-ne { right: 0; top: 0; cursor: nesw-resize; }
+.meridian-resize-nw { left: 0; top: 0; cursor: nwse-resize; }
+
+.meridian-toggle {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: 2147483601;
+  background: rgba(18, 16, 28, 0.6);
+  color: #c9a6ff;
+  border: 1px solid rgba(145, 70, 255, 0.35);
+  border-radius: 999px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.meridian-toggle:hover {
+  background: rgba(28, 22, 44, 0.75);
+  color: #e0c8ff;
+  border-color: rgba(145, 70, 255, 0.6);
+}
+.meridian-toggle.show { display: inline-flex; }

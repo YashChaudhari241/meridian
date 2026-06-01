@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Meridian — Twitch Chat Overlay",
+  "version": "1.0.0",
+  "description": "Watch YouTube videos with a draggable, transparent Twitch chat overlay. Map YouTube channels to Twitch channels.",
+  "permissions": ["storage", "cookies"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://*.twitch.tv/*",
+    "https://id.twitch.tv/*",
+    "https://api.twitch.tv/*",
+    "https://7tv.io/*",
+    "https://api.betterttv.net/*",
+    "https://cdn.betterttv.net/*",
+    "https://api.frankerfacez.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Meridian"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["src/content.js"],
+      "css": ["src/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/overlay.css", "src/twitch-irc.js", "src/emotes.js"],
+      "matches": ["https://www.youtube.com/*"]
+    }
+  ]
+}
