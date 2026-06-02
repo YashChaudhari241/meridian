@@ -2,3 +2,5 @@
 .DS_Store
 node_modules/
 *.zip
+.playwright-mcp/
+.chrome-profile/

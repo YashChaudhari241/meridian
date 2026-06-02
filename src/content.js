@@ -14,6 +14,13 @@
   } catch {
     EmoteRegistry = class { constructor(){} currentMap(){ return null; } loadForChannel(){ return Promise.resolve(); } };
   }
+  let HighlightEngine, DensityTracker;
+  try {
+    ({ HighlightEngine, DensityTracker } = await import(chrome.runtime.getURL("src/highlights.js")));
+  } catch {
+    HighlightEngine = class { ingest(){} prune(){} reset(){} };
+    DensityTracker = class { add(){} reset(){} resolutionFor(){ return 10; } series(){ return []; } };
+  }
 
   const PREFS_KEY = "meridian.prefs";
   function defaultRect() {
@@ -37,8 +44,9 @@
     chatDelaySec: 0,
     updateFrequencyMs: 0,
     autoscroll: true,
-    hotkeyToggle: "",
-    hotkeyFocusInput: "",
+    hotkeyHide: "",
+    hotkeyOverlay: "",
+    hotkeyDocked: "",
     blockedWords: [],
     hideDeleted: false,
     opacity: 0.55,
@@ -49,12 +57,128 @@
     bgEnabled: true,
     shadowEnabled: true,
     boundToPlayer: true,
-    playerAnchor: null
+    playerAnchor: null,
+    bubbleHidden: false,
+    sites: {},                   // per-host: { "<host>": { enabled: bool } }
+    highlightTimeline: false,    // master: msgs/sec density wave on the live seekbar
+    highlightEnabled: false,     // emote-surge markers on the wave (requires highlightTimeline)
+    highlightThreshold: 3,       // fixed: unique viewers per ~12 s window (floor 3)
+    highlightAnchorLive: true,   // anchor highlights at the live edge (scroll left) vs. the viewer's seek position
+    emote7tv: true,              // 3rd-party emote providers (each toggleable; all on by default)
+    emoteBttv: true,
+    emoteFfz: true
   };
+
+  // Chatters for @-mention autocomplete (lcLogin → displayName). Seeded from the IRC
+  // NAMES list / JOINs (so lurkers who haven't typed are suggestible too) and upgraded
+  // with the real display name once someone speaks.
+  const chatters = new Map();
+  // Hard bound so a huge channel (100k+ chatters over a session) can't grow memory
+  // unboundedly — we evict the oldest. A full prefix scan of this many entries is still
+  // sub-millisecond, and the suggest loop early-breaks once it has enough matches.
+  const CHATTER_CAP = 50000;
+  function addChatter(login, displayName) {
+    if (!login) return;
+    const lc = login.toLowerCase();
+    const existing = chatters.get(lc);
+    // Keep the best name we have — don't downgrade a real display name back to the login.
+    const dn = displayName || existing || login;
+    if (chatters.has(lc)) chatters.delete(lc); // re-insert → most-recent ordering
+    else if (chatters.size >= CHATTER_CAP) chatters.delete(chatters.keys().next().value);
+    chatters.set(lc, dn);
+  }
 
   let prefs = { ...defaults, ...(await loadPrefs()) };
   if (!prefs.rect) prefs.rect = defaultRect();
   prefs.rect = clampRect(prefs.rect);
+
+  // --- site adapters ---
+  // Each host runs the same overlay; adapters differ only in how we find the video
+  // player (for bound mode) and how we detect the channel handle (for mappings).
+  const HOST = location.hostname.replace(/^www\./, "");
+  const youtubeAdapter = {
+    name: "youtube",
+    findPlayer: () => document.querySelector("#movie_player"),
+    detectHandle() {
+      const sel = [
+        'ytd-video-owner-renderer a[href*="/@"]',
+        'ytd-channel-name a[href*="/@"]',
+        '#owner a[href*="/@"]',
+        'a.yt-simple-endpoint[href*="/@"]'
+      ].join(",");
+      const href = document.querySelector(sel)?.getAttribute("href") || "";
+      const m = href.match(/\/@([^/?#]+)/);
+      return m ? m[1].toLowerCase() : null;
+    },
+    // Dock anchor: the native live-chat frame itself (reliably sized in every layout —
+    // normal/theater/fullscreen — whereas #chat-container collapses to width:0 in theater).
+    // We overlay our panel inside it, so we never restructure YouTube's chat layout.
+    findDockAnchor: () => document.querySelector("ytd-live-chat-frame#chat"),
+    nativeChatLabel: "YouTube",
+    // Timeline highlights (live DVR seekbar). Live detection: the player only renders a
+    // `.ytp-live-badge` for live content — `video.duration` is unreliable (finite even live).
+    hasTimeline: true,
+    canSeek: true,           // real DVR seekbar — clicking a highlight seeks
+    waveSpanSec: null,       // wave window = the seekbar's DVR span
+    isLive: () => !!document.querySelector(".ytp-live-badge"),
+    // Only treat a watch page that actually has a player as "active" (not the home/search feed).
+    hasVideo: () => !!(new URLSearchParams(location.search).get("v")
+      && (document.querySelector("#movie_player video") || document.querySelector("video"))),
+    getVideo: () => document.querySelector("#movie_player video") || document.querySelector("video"),
+    findSeekbar: () => document.querySelector("#movie_player .ytp-progress-bar"),
+    videoId: () => new URLSearchParams(location.search).get("v") || null,
+    navEvent: "yt-navigate-finish"
+  };
+  const kickAdapter = {
+    name: "kick",
+    // Kick's player box (verified live): the <video id="video-player"> sits inside
+    // #injected-channel-player, which is the sized, positioned container we bind to.
+    findPlayer() {
+      return document.querySelector("#injected-channel-player")
+        || document.querySelector("#injected-embedded-channel-player-video")
+        || document.querySelector("video")?.parentElement
+        || null;
+    },
+    // Channel slug from the URL: kick.com/<slug>.
+    detectHandle() {
+      const m = location.pathname.match(/^\/([A-Za-z0-9_]+)/);
+      const slug = m && m[1].toLowerCase();
+      const skip = new Set(["", "browse", "categories", "category", "search", "following", "dashboard", "messages", "clips"]);
+      return slug && !skip.has(slug) ? slug : null;
+    },
+    // Dock anchor: Kick's chat sidebar (verified live — h-full column holding a header bar
+    // + the messages/input body). We overlay our panel inside it.
+    findDockAnchor: () => document.querySelector("#channel-chatroom"),
+    nativeChatLabel: "Kick",
+    // Kick live has no usable DVR timeline, so the highlight wave/emotes are unsupported here.
+    hasTimeline: false,
+    isLive: () => true,
+    hasVideo() { return !!(this.detectHandle() && document.querySelector("video")); },
+    getVideo: () => document.querySelector("#injected-channel-player video") || document.querySelector("video"),
+    findSeekbar: () => null,
+    videoId: () => null,
+    navEvent: null // SPA nav covered by the 2 s poll
+  };
+  // Content script only runs on supported hosts (see manifest).
+  const SITE = /(^|\.)kick\.com$/.test(HOST) ? kickAdapter : youtubeAdapter;
+
+  // Per-origin enable gate — lets the user turn Meridian off for youtube.com or kick.com
+  // from the popup without uninstalling. Defaults ON.
+  function siteEnabled() {
+    const entry = prefs.sites?.[HOST];
+    return entry && typeof entry.enabled === "boolean" ? entry.enabled : true;
+  }
+  if (!siteEnabled()) {
+    // Stay dormant but watch for the user enabling this site from the popup.
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes[PREFS_KEY]) {
+        const next = changes[PREFS_KEY].newValue || {};
+        const e = next.sites?.[HOST];
+        if (e && e.enabled) location.reload();
+      }
+    });
+    return;
+  }
 
   function clampRect(r) {
     const vw = window.innerWidth, vh = window.innerHeight;
@@ -74,6 +198,19 @@
   let detectedHandle = null;
   let playerResizeObs = null;
   const CORNER_THRESH = 60;
+  // IRC/emote + display-mode state — declared early because applyMode() (called during
+  // setup) reads these; `let` would otherwise be in the temporal dead zone and throw.
+  let irc = null;
+  let currentAuth = null;
+  let emoteReg = null;
+  let lastVisibleMode = "overlay"; // restored when un-hiding via the bubble
+  let dockRetryTimer = null;
+  // Docked-mode tab switcher state (native site chat ⇄ our Twitch chat).
+  let dockTabBar = null;
+  let dockAnchor = null;       // the native chat frame/column we overlay
+  let dockAnchorPosSet = false; // whether we set inline position:relative on the anchor
+  let dockChatTab = "twitch";  // which chat is shown while docked; default to ours
+  let pageActive = false;      // true only when the page actually has a video/stream player
 
   // Blocklist: rebuilt from prefs whenever prefs.blockedWords changes.
   // O(1) membership check per word; O(n) per message (n = word count).
@@ -110,15 +247,17 @@
         <input class="meridian-delay-val" type="text" inputmode="numeric" value="0s" spellcheck="false" />
         <button class="meridian-btn" data-act="delay-up">+</button>
       </div>
+      <button class="meridian-btn" data-act="mode" title="Dock / undock">⧉</button>
       <button class="meridian-btn" data-act="reconnect" title="Reconnect">↻</button>
       <button class="meridian-btn" data-act="hide" title="Hide">×</button>
     </div>
     <div class="meridian-status"></div>
     <div class="meridian-messages"></div>
+    <button class="meridian-resume" title="Resume autoscroll"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><polygon points="6 4 20 12 6 20"></polygon></svg>Autoscroll</button>
     <div class="meridian-suggest"></div>
     <div class="meridian-input-wrap">
-      <input class="meridian-input" placeholder="Send a message…" maxlength="500" autocomplete="off" />
-      <button class="meridian-send" title="Send"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="13 6 19 12 13 18"></polyline></svg></button>
+      <div class="meridian-input" contenteditable="true" role="textbox" spellcheck="false" data-placeholder="Send a message…"></div>
+      <button class="meridian-send" title="Send"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"></path></svg></button>
     </div>
     <div class="meridian-resize meridian-resize-se" data-corner="se"></div>
     <div class="meridian-resize meridian-resize-sw" data-corner="sw"></div>
@@ -143,6 +282,8 @@
     input: root.querySelector(".meridian-input"),
     send: root.querySelector(".meridian-send"),
     suggest: root.querySelector(".meridian-suggest"),
+    resume: root.querySelector(".meridian-resume"),
+    modeBtn: root.querySelector('[data-act="mode"]'),
     grips: root.querySelectorAll(".meridian-resize")
   };
 
@@ -157,7 +298,7 @@
   applyAppearance();
   applyDelayDisplay();
   updateChannelInputFromPrefs();
-  if (prefs.hidden) hideOverlay(); else showOverlay();
+  applyModeVisual(); // visual only — initial connect happens after all state is declared
 
   // --- drag ---
   makeDraggable(els.header, (rect) => persistRect(rect));         // header: always drags
@@ -172,7 +313,7 @@
 
   async function persistRect(rect) {
     if (prefs.boundToPlayer) {
-      const player = findPlayerElement();
+      const player = boundHost();
       if (player) {
         const pw = player.offsetWidth, ph = player.offsetHeight;
         if (pw > 0 && ph > 0) prefs.playerAnchor = computeAnchor(rect, pw, ph);
@@ -224,11 +365,13 @@
   }
 
   // --- header actions ---
-  root.querySelector('[data-act="hide"]').addEventListener("click", async (e) => {
+  root.querySelector('[data-act="hide"]').addEventListener("click", (e) => {
     e.stopPropagation();
-    prefs.hidden = true; await savePrefs();
-    hideOverlay();
-    disconnectIRC();
+    setSiteMode("hidden");
+  });
+  els.modeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setSiteMode(siteMode() === "docked" ? "overlay" : "docked");
   });
   root.querySelector('[data-act="reconnect"]').addEventListener("click", (e) => {
     e.stopPropagation();
@@ -252,10 +395,9 @@
     await setDelay(Math.min(600, (prefs.chatDelaySec || 0) + 1));
   });
 
-  toggleBtn.addEventListener("click", async () => {
-    prefs.hidden = false; await savePrefs();
-    showOverlay();
-    if (!irc) ensureConnected();
+  toggleBtn.addEventListener("click", () => {
+    // Restore to the last non-hidden mode (default overlay).
+    setSiteMode(lastVisibleMode);
   });
 
   // --- channel input (twitch.tv/<channel> with × reset; auto-fills from mapping) ---
@@ -296,14 +438,27 @@
 
   // --- send ---
   els.send.addEventListener("click", () => sendCurrent());
-  els.input.addEventListener("input", () => updateSuggest());
+  els.input.addEventListener("input", () => { maybeReplaceEmoteBeforeCaret(); updateSuggest(); });
   els.input.addEventListener("blur", () => setTimeout(closeSuggest, 100));
+  // Keep the contenteditable single-line and plain-text: paste as text, no newlines.
+  els.input.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const t = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+    document.execCommand("insertText", false, t.replace(/\r?\n/g, " "));
+  });
 
   // Handle our keys on the inputs directly; also stop propagation so YouTube
   // shortcuts (k/j/l/space/etc.) don't fire while the user is typing.
   els.input.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") {
+      // Tab always autocompletes the current word (never moves focus out of the input).
+      e.preventDefault();
+      e.stopPropagation();
+      if (!suggestState.open) updateSuggest();
+      if (suggestState.open) completeSuggest();
+      return;
+    }
     if (suggestState.open) {
-      if (e.key === "Tab")       { e.preventDefault(); completeSuggest(); return; }
       if (e.key === "ArrowDown") { e.preventDefault(); moveSuggest(1);    return; }
       if (e.key === "ArrowUp")   { e.preventDefault(); moveSuggest(-1);   return; }
       if (e.key === "Escape")    { e.preventDefault(); closeSuggest();    return; }
@@ -328,17 +483,97 @@
   });
   function isOurInput(t) { return t === els.input || t === els.channel || t === els.delayVal; }
 
+  // --- contenteditable input model ---
+  // The chat input is a contenteditable div holding text nodes and atomic emote
+  // chips (<img.meridian-input-emote data-name>). These helpers translate between
+  // the DOM and a plain-text "value", and manage the caret for autocomplete.
+  function nodeText(n) {
+    if (n.nodeType === 3) return n.nodeValue;
+    if (n.nodeName === "IMG" && n.dataset && n.dataset.name != null) return n.dataset.name;
+    if (n.nodeName === "BR") return "";
+    return n.textContent || "";
+  }
+  function inputText() {
+    let s = "";
+    for (const n of els.input.childNodes) s += nodeText(n);
+    return s;
+  }
+  function clearInput() { els.input.textContent = ""; }
+  function focusInputEnd() {
+    els.input.focus();
+    const sel = window.getSelection();
+    const r = document.createRange();
+    r.selectNodeContents(els.input);
+    r.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  // Caret position as { node:<text node>, offset } when the caret sits inside a text
+  // node; node is null when it doesn't (e.g. right after a chip with no text yet).
+  function caretTextNode() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    if (!r.collapsed || !els.input.contains(r.startContainer)) return null;
+    if (r.startContainer.nodeType !== 3) return null;
+    return { node: r.startContainer, offset: r.startOffset };
+  }
+  function setCaret(node, offset) {
+    const sel = window.getSelection();
+    const r = document.createRange();
+    r.setStart(node, Math.max(0, Math.min(offset, node.nodeValue.length)));
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  function makeInputEmote(name, url) {
+    const img = document.createElement("img");
+    img.className = "meridian-input-emote";
+    img.src = url;
+    img.alt = name;
+    img.dataset.name = name;
+    img.setAttribute("contenteditable", "false");
+    return img;
+  }
+  // After a space is typed, if the token just before it is a complete emote, swap
+  // the typed text for an inline emote chip (keeping the space + caret in place).
+  function maybeReplaceEmoteBeforeCaret() {
+    const ci = caretTextNode();
+    if (!ci) return;
+    const v = ci.node.nodeValue;
+    const pos = ci.offset;
+    if (pos === 0 || !/\s/.test(v[pos - 1])) return; // only fires right after whitespace
+    let start = pos - 1;
+    while (start > 0 && !/\s/.test(v[start - 1])) start--;
+    const word = v.slice(start, pos - 1);
+    if (!word) return;
+    const em = emoteReg?.currentMap()?.get(word);
+    if (!em) return;
+    const before = v.slice(0, start);
+    const after = v.slice(pos - 1); // includes the triggering space + trailing text
+    const frag = document.createDocumentFragment();
+    if (before) frag.appendChild(document.createTextNode(before));
+    frag.appendChild(makeInputEmote(word, em.url));
+    const afterNode = document.createTextNode(after);
+    frag.appendChild(afterNode);
+    ci.node.parentNode.replaceChild(frag, ci.node);
+    setCaret(afterNode, 1); // afterNode starts with the triggering space; caret goes after it
+  }
+
   // --- emote autocomplete ---
   const suggestState = { open: false, items: [], index: 0, word: null };
   function getCurrentWord() {
-    const v = els.input.value;
-    const pos = els.input.selectionStart ?? v.length;
+    const ci = caretTextNode();
+    if (!ci) return { node: null, start: 0, end: 0, text: "" };
+    const v = ci.node.nodeValue;
+    const pos = ci.offset;
     let start = pos;
     while (start > 0 && !/\s/.test(v[start - 1])) start--;
-    return { start, end: pos, text: v.slice(start, pos) };
+    return { node: ci.node, start, end: pos, text: v.slice(start, pos) };
   }
   function updateSuggest() {
     const w = getCurrentWord();
+    if (w.text.startsWith("@")) { updateUserSuggest(w); return; }
     if (!w.text || w.text.length < 2) { closeSuggest(); return; }
     const map = emoteReg?.currentMap();
     if (!map || map.size === 0) { closeSuggest(); return; }
@@ -359,19 +594,44 @@
     suggestState.word = w;
     renderSuggest();
   }
+  function updateUserSuggest(w) {
+    const needle = w.text.slice(1).toLowerCase();
+    if (needle.length < 1 || chatters.size === 0) { closeSuggest(); return; }
+    // Prefix-only match (on login or display name) — "ro" matches "Ross", not "styRo".
+    const matches = [];
+    for (const [lc, dn] of chatters) {
+      if (lc.startsWith(needle) || dn.toLowerCase().startsWith(needle)) {
+        matches.push({ name: dn, user: true });
+        if (matches.length >= 40) break;
+      }
+    }
+    if (matches.length === 0) { closeSuggest(); return; }
+    matches.sort((a, b) => a.name.localeCompare(b.name));
+    suggestState.open = true;
+    suggestState.items = matches.slice(0, 8);
+    suggestState.index = 0;
+    suggestState.word = w;
+    renderSuggest();
+  }
   function renderSuggest() {
     els.suggest.innerHTML = "";
     suggestState.items.forEach((m, i) => {
       const row = document.createElement("div");
       row.className = "meridian-suggest-item" + (i === suggestState.index ? " selected" : "");
-      const img = document.createElement("img");
-      img.src = m.em.url;
       const name = document.createElement("span");
-      name.textContent = m.name;
       const prov = document.createElement("span");
       prov.className = "prov";
-      prov.textContent = m.em.provider;
-      row.append(img, name, prov);
+      if (m.user) {
+        name.textContent = "@" + m.name;
+        prov.textContent = "chatter";
+        row.append(name, prov);
+      } else {
+        const img = document.createElement("img");
+        img.src = m.em.url;
+        name.textContent = m.name;
+        prov.textContent = m.em.provider;
+        row.append(img, name, prov);
+      }
       row.addEventListener("mousedown", (e) => { e.preventDefault(); suggestState.index = i; completeSuggest(); });
       els.suggest.appendChild(row);
     });
@@ -384,14 +644,29 @@
   }
   function completeSuggest() {
     const item = suggestState.items[suggestState.index];
-    if (!item || !suggestState.word) return;
-    const v = els.input.value;
     const w = suggestState.word;
-    const inserted = item.name + " ";
-    els.input.value = v.slice(0, w.start) + inserted + v.slice(w.end);
-    const cursor = w.start + inserted.length;
-    els.input.selectionStart = els.input.selectionEnd = cursor;
-    closeSuggest();
+    if (!item || !w || !w.node || !els.input.contains(w.node)) return;
+    if (item.user) {
+      // Insert "@name " as plain text into the caret's text node.
+      const inserted = "@" + item.name + " ";
+      const v = w.node.nodeValue;
+      w.node.nodeValue = v.slice(0, w.start) + inserted + v.slice(w.end);
+      setCaret(w.node, w.start + inserted.length);
+      closeSuggest();
+    } else {
+      // Replace the typed word with an inline emote chip + trailing space.
+      const v = w.node.nodeValue;
+      const before = v.slice(0, w.start);
+      const after = v.slice(w.end);
+      const frag = document.createDocumentFragment();
+      if (before) frag.appendChild(document.createTextNode(before));
+      frag.appendChild(makeInputEmote(item.name, item.em.url));
+      const afterNode = document.createTextNode(" " + after);
+      frag.appendChild(afterNode);
+      w.node.parentNode.replaceChild(frag, w.node);
+      setCaret(afterNode, 1);
+      closeSuggest();
+    }
   }
   function closeSuggest() {
     suggestState.open = false;
@@ -399,7 +674,7 @@
     els.suggest.innerHTML = "";
   }
   function sendCurrent() {
-    const text = els.input.value.trim();
+    const text = inputText().trim();
     if (!text) return;
     if (!irc) { setStatus("not connected"); return; }
     if (currentAuth?.kind === "anonymous") {
@@ -407,7 +682,7 @@
       return;
     }
     if (!irc.say(text)) { setStatus("send failed (not connected)"); return; }
-    els.input.value = "";
+    clearInput();
   }
 
   // --- delay queue + update-frequency batching ---
@@ -417,6 +692,23 @@
   let renderTimer = null;
 
   function enqueue(m) {
+    if (m.type === "roomstate") {
+      // Channel id from IRC — (re)load 3rd-party channel emotes without Helix.
+      const target = resolveChannel();
+      if (m.roomId && target && m.channel?.toLowerCase() === target.toLowerCase()) {
+        emoteReg?.loadForChannel(target, m.roomId).catch(() => {});
+      }
+      return;
+    }
+    if (m.type === "names") {
+      if (!lastJoined || m.channel?.toLowerCase() === lastJoined) for (const u of m.users) addChatter(u);
+      return;
+    }
+    if (m.type === "join") {
+      if (!lastJoined || m.channel?.toLowerCase() === lastJoined) addChatter(m.user);
+      return;
+    }
+    if (m.type === "msg" && m.user) { addChatter(m.user, m.displayName); feedHighlights(m); }
     if (m.type === "msg" && !m.self && isBlocked(m.text)) return;
     if (m.self || (prefs.chatDelaySec || 0) <= 0) { scheduleRender(m); return; }
     queue.push(m);
@@ -469,16 +761,25 @@
   }
 
   // --- IRC ---
-  let irc = null;
-  let currentAuth = null;
-  let emoteReg = null;
+  // (irc / currentAuth / emoteReg declared earlier — see note near the top.)
+
+  // Which 3rd-party emote providers the user has enabled (provider strings match emotes.js).
+  function enabledEmoteProviders() {
+    const s = new Set();
+    if (prefs.emote7tv !== false) s.add("7TV");
+    if (prefs.emoteBttv !== false) s.add("BTTV");
+    if (prefs.emoteFfz !== false) s.add("FFZ");
+    return s;
+  }
 
   async function ensureConnected() {
+    if (!pageActive) return; // don't connect on pages without a video
     const resp = await chrome.runtime.sendMessage({ type: "AUTH_GET" });
     if (!resp?.ok || !resp.auth) { setStatus("auth unavailable"); return; }
     currentAuth = resp.auth;
     emoteReg = new EmoteRegistry({
       getAuth: () => currentAuth,
+      getEnabledProviders: enabledEmoteProviders,
       onChange: () => { /* nothing to do — emotes resolved at render time */ }
     });
     applyAuthUI(currentAuth);
@@ -497,9 +798,10 @@
 
   function applyAuthUI(auth) {
     const anon = auth.kind === "anonymous";
-    els.input.disabled = anon;
+    els.input.contentEditable = anon ? "false" : "true";
+    els.input.classList.toggle("disabled", anon);
     els.send.disabled = anon;
-    els.input.placeholder = anon
+    els.input.dataset.placeholder = anon
       ? "Read-only — log into twitch.tv to chat"
       : `Send as ${auth.displayName || auth.login}…`;
   }
@@ -522,6 +824,7 @@
     if (irc && target && target !== lastJoined) {
       irc.join(target);
       lastJoined = target;
+      chatters.clear(); // reset suggestions for the new channel (NAMES will reseed)
       emoteReg?.loadForChannel(target).catch(() => {});
     }
   }
@@ -531,6 +834,10 @@
     if (area !== "local") return;
     if (changes["meridian.auth"] || changes["meridian.authMode"] || changes["meridian.cookieRev"]) {
       reconnect();
+    }
+    // Highlight cache cleared from the popup — drop in-memory markers for this video.
+    if (highlightsKey && changes[highlightsKey] && changes[highlightsKey].newValue == null) {
+      highlights.clear(); hlEngine.reset(); renderEmotes();
     }
     if (changes[PREFS_KEY]) {
       const next = { ...defaults, ...(changes[PREFS_KEY].newValue || {}) };
@@ -547,57 +854,62 @@
       const delayChanged = next.chatDelaySec !== prefs.chatDelaySec;
       const boundChanged = next.boundToPlayer !== prefs.boundToPlayer;
       const blocklistChanged = JSON.stringify(next.blockedWords) !== JSON.stringify(prefs.blockedWords);
+      const prevMode = siteMode();
+      const bubbleChanged = next.bubbleHidden !== prefs.bubbleHidden;
+      const highlightChanged = next.highlightEnabled !== prefs.highlightEnabled
+        || next.highlightTimeline !== prefs.highlightTimeline;
       prefs = next;
+      const modeChanged = siteMode() !== prevMode;
       if (channelInputsChanged) { syncChannel(); updateChannelInputFromPrefs(); }
       if (appearanceChanged) applyAppearance();
       if (delayChanged) { applyDelayDisplay(); flushQueue(); }
-      if (boundChanged) applyBoundMode();
+      if (boundChanged && siteMode() === "overlay") applyBoundMode();
       if (blocklistChanged) rebuildBlockSet();
+      if (modeChanged) applyMode();
+      else if (bubbleChanged) applyBubbleVisibility();
+      if (highlightChanged) refreshHighlightState();
     }
   });
 
   // --- YouTube handle detection ---
-  function detectYoutubeHandle() {
-    const sel = [
-      'ytd-video-owner-renderer a[href*="/@"]',
-      'ytd-channel-name a[href*="/@"]',
-      '#owner a[href*="/@"]',
-      'a.yt-simple-endpoint[href*="/@"]'
-    ].join(",");
-    const a = document.querySelector(sel);
-    const href = a?.getAttribute("href") || "";
-    const m = href.match(/\/@([^/?#]+)/);
-    return m ? m[1].toLowerCase() : null;
-  }
   function refreshDetectedHandle() {
-    const h = detectYoutubeHandle();
+    // Mount/unmount as the SPA navigates between video pages and the feed.
+    syncPageActive();
+    if (!pageActive) return;
+    const h = SITE.detectHandle();
     if (h !== detectedHandle) { detectedHandle = h; syncChannel(); }
     else updateChannelInputFromPrefs();
     // Retry player binding if not yet established (player may load after content script).
-    if (prefs.boundToPlayer && root.parentElement !== findPlayerElement()) applyBoundMode();
+    if (siteMode() === "overlay" && prefs.boundToPlayer && root.parentElement !== boundHost()) applyBoundMode();
+    // Re-assert docking if the SPA replaced the chat frame (e.g. entering theater/fullscreen
+    // re-parents it); dock() is idempotent and re-homes our panel + tab bar onto the new anchor.
+    if (siteMode() === "docked") {
+      const anchor = SITE.findDockAnchor?.();
+      if (anchor && (root.parentElement !== anchor || !anchor.contains(dockTabBar))) dock();
+    }
   }
   refreshDetectedHandle();
-  window.addEventListener("yt-navigate-finish", () => setTimeout(refreshDetectedHandle, 400));
+  if (SITE.navEvent) window.addEventListener(SITE.navEvent, () => setTimeout(refreshDetectedHandle, 400));
   setInterval(refreshDetectedHandle, 2000);
+
+  // Re-home the overlay when entering/leaving fullscreen so it stays visible inside the
+  // fullscreen element (fixes the Kick overlay vanishing in fullscreen).
+  ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) =>
+    document.addEventListener(ev, () => { if (siteMode() === "overlay" && prefs.boundToPlayer) applyBoundMode(); })
+  );
 
   // --- hotkey ---
   document.addEventListener("keydown", (e) => {
     if (isOurInput(e.target)) return;
     const combo = comboFromEvent(e);
     if (!combo) return;
-    if (prefs.hotkeyToggle && combo === prefs.hotkeyToggle) {
-      e.preventDefault();
-      prefs.hidden = !prefs.hidden;
-      savePrefs();
-      if (prefs.hidden) { hideOverlay(); disconnectIRC(); }
-      else { showOverlay(); ensureConnected(); }
-      return;
-    }
-    if (prefs.hotkeyFocusInput && combo === prefs.hotkeyFocusInput) {
-      e.preventDefault();
-      if (prefs.hidden) { prefs.hidden = false; savePrefs(); showOverlay(); ensureConnected(); }
-      els.input.focus();
-    }
+    let target = null;
+    if (prefs.hotkeyHide && combo === prefs.hotkeyHide) target = "hidden";
+    else if (prefs.hotkeyOverlay && combo === prefs.hotkeyOverlay) target = "overlay";
+    else if (prefs.hotkeyDocked && combo === prefs.hotkeyDocked) target = "docked";
+    if (!target) return;
+    e.preventDefault();
+    if (siteMode() !== target) setSiteMode(target);
   }, true);
 
   // --- inactivity → hide bars after 10s, blur input but keep typed text ---
@@ -646,26 +958,408 @@
     if (scrollbarTimer) clearTimeout(scrollbarTimer);
     scrollbarTimer = setTimeout(() => els.messages.classList.remove("scrolling"), 800);
   }
+  function setResumePill(show) { els.resume.classList.toggle("show", !!show); }
+  function resumeAutoscroll() {
+    userScrollUntil = 0;
+    setResumePill(false);
+    els.messages.scrollTop = els.messages.scrollHeight;
+  }
   els.messages.addEventListener("wheel", () => {
-    if (prefs.autoscroll) userScrollUntil = Date.now() + 8000;
+    if (prefs.autoscroll) { userScrollUntil = Date.now() + 8000; setResumePill(true); }
     showScrollbar();
   }, { passive: true });
+  els.resume.addEventListener("click", (e) => { e.stopPropagation(); resumeAutoscroll(); });
+  els.resume.addEventListener("mousedown", (e) => e.stopPropagation());
   // (no "scroll" listener — programmatic auto-scroll would falsely flash the scrollbar)
   // resume autoscroll after 8s; snap to bottom
   setInterval(() => {
-    if (!prefs.autoscroll) return;
-    if (userScrollUntil && Date.now() >= userScrollUntil) {
-      userScrollUntil = 0;
-      els.messages.scrollTop = els.messages.scrollHeight;
-    }
+    if (!prefs.autoscroll) { setResumePill(false); return; }
+    if (userScrollUntil && Date.now() >= userScrollUntil) resumeAutoscroll();
   }, 500);
 
-  if (!prefs.hidden) ensureConnected();
+  // Initial mount + connect — only if this page has a video (syncPageActive → applyMode).
+  syncPageActive();
+
+  // --- timeline highlights ---
+  // Two layers, both live-streams-only, rendered over the seekbar:
+  //   1. A "most-replayed"-style WAVE driven by chat activity (msgs/sec). Height is relative
+  //      (renormalized to the running peak every minute) and the horizontal resolution adapts
+  //      to stream length (~10 s/point for a 10 min stream → ~2 min/point for 6 h), recomputed
+  //      every 10 min. No threshold.
+  //   2. EMOTE highlights — when ≥ threshold unique viewers spam one emote in ~12 s, a small
+  //      emote sits on the wave at that moment. Near-together emotes are grouped (one shown +
+  //      a "+N" badge); grouping also caps the total rendered at ~50. Requires the wave.
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const density = new DensityTracker({ baseRes: 5 });
+  const highlights = new Map(); // key -> { name, url, videoTime, count, threshold, wallTs }
+  const hlEngine = new HighlightEngine({
+    windowMs: 12000,
+    getThreshold: highlightThreshold,
+    onHighlight: addHighlight,
+    onUpdate: bumpHighlight
+  });
+  let waveLayer = null;
+  let lastSeries = null, lastSpan = 0, lastNowSec = 0;
+  let densityRes = 5, densityPeak = 1, lastPeakAt = 0, lastResAt = 0;
+  let highlightsKey = "";
+  let saveHlTimer = null;
+  // Refreshed by the 2 s render loop so the per-message hot path needs no DOM access.
+  let densityArmed = false;
+
+  function highlightThreshold() { return Math.max(3, prefs.highlightThreshold | 0 || 3); }
+  function isLiveStream() {
+    // `video.duration` is unreliable on YouTube live (often finite), so prefer the adapter's
+    // DOM-based live check (e.g. the .ytp-live-badge); fall back to duration if unavailable.
+    if (typeof SITE.isLive === "function") return SITE.isLive();
+    const v = SITE.getVideo?.();
+    return !!(v && v.duration === Infinity);
+  }
+  // The wave only makes sense on a live stream with a seekable DVR window (YouTube).
+  function waveActive() { return SITE.hasTimeline && prefs.highlightTimeline && isLiveStream(); }
+  function emoteHighlightsActive() { return waveActive() && prefs.highlightEnabled; }
+
+  function videoSeekable() {
+    const v = SITE.getVideo?.();
+    if (!v || !v.seekable || !v.seekable.length) return null;
+    const start = v.seekable.start(0);
+    const end = v.seekable.end(v.seekable.length - 1);
+    return end > start ? { v, start, end } : null;
+  }
+
+  function feedHighlights(m) {
+    // Hot path (runs per message) — no DOM here (`densityArmed` is refreshed by the 2 s loop).
+    // Density is keyed by WALL-CLOCK time, not seekable.end (which YouTube often freezes); the
+    // render maps "how long ago" onto the seekbar so the wave scrolls left as the stream runs.
+    if (m.self || !densityArmed) return;
+    density.add(Date.now() / 1000, 1);
+    if (!prefs.highlightEnabled) return;
+    const user = (m.user || "").toLowerCase();
+    const seen = new Set();
+    for (const e of m.emotes || []) {
+      if (e.name && !seen.has(e.name)) {
+        seen.add(e.name);
+        hlEngine.ingest(e.name, `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/1.0`, user, m.ts);
+      }
+    }
+    const map = emoteReg?.currentMap();
+    if (map && map.size && m.text) {
+      for (const tok of m.text.split(/\s+/)) {
+        if (tok && !seen.has(tok)) {
+          const em = map.get(tok);
+          if (em) { seen.add(tok); hlEngine.ingest(tok, em.url, user, m.ts); }
+        }
+      }
+    }
+  }
+
+  function addHighlight(h) {
+    const s = videoSeekable();
+    if (!s) return;
+    // Store wall-clock + how far behind the live edge the viewer was at detection. Both anchor
+    // modes scroll with the stream; "behindLive" shifts the off-mode start to the viewer's spot.
+    highlights.set(h.key, {
+      key: h.key, name: h.name, url: h.url, count: h.count, threshold: h.threshold,
+      wallTs: h.firstTs, behindLive: Math.max(0, s.end - s.v.currentTime)
+    });
+    renderEmotes();
+    scheduleSaveHighlights();
+  }
+  function bumpHighlight(u) {
+    const rec = highlights.get(u.key);
+    if (!rec) return;
+    rec.count = u.count; // picked up by the next renderEmotes() pass (2 s loop)
+    scheduleSaveHighlights();
+  }
+
+  // Horizontal fraction (0..1) on the seekbar for a highlight. Both modes scroll left over time
+  // (wall-clock); "off" additionally offsets by how far behind live the viewer was at detection,
+  // so it starts at their playback position instead of the live edge.
+  function highlightFrac(rec, s, nowMs) {
+    const span = waveWindow(s);
+    if (span <= 0) return null;
+    const behind = (prefs.highlightAnchorLive === false) ? (rec.behindLive || 0) : 0;
+    const ageSec = (nowMs - rec.wallTs) / 1000 + (prefs.chatDelaySec || 0) + behind;
+    return 1 - ageSec / span;
+  }
+
+  function seekTo(t) {
+    const s = videoSeekable();
+    if (!s) return;
+    s.v.currentTime = Math.max(s.start, Math.min(s.end, t));
+  }
+
+  // --- wave + emote rendering ---
+  function ensureWaveLayer() {
+    const bar = SITE.findSeekbar?.();
+    if (!bar) return null;
+    if (waveLayer && waveLayer.parentElement === bar) return waveLayer;
+    if (waveLayer && waveLayer.parentElement) waveLayer.remove();
+    waveLayer = document.createElement("div");
+    waveLayer.className = "meridian-wave-layer";
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("class", "meridian-wave-svg");
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    const defs = document.createElementNS(SVGNS, "defs");
+    const grad = document.createElementNS(SVGNS, "linearGradient");
+    grad.setAttribute("id", "meridianWaveGrad");
+    grad.setAttribute("x1", "0"); grad.setAttribute("y1", "0");
+    grad.setAttribute("x2", "0"); grad.setAttribute("y2", "1");
+    // Non-linear: opaque only near the crest (top), falling off fast so the body stays faint —
+    // taller peaks read as brighter, low activity stays subtle.
+    for (const [off, op] of [[0, 0.96], [18, 0.55], [45, 0.28], [100, 0.1]]) {
+      const st = document.createElementNS(SVGNS, "stop");
+      st.setAttribute("offset", off + "%");
+      st.setAttribute("stop-color", "#ffffff");
+      st.setAttribute("stop-opacity", String(op));
+      grad.appendChild(st);
+    }
+    defs.appendChild(grad);
+    const path = document.createElementNS(SVGNS, "path");
+    path.setAttribute("class", "meridian-wave-path");
+    path.setAttribute("fill", "url(#meridianWaveGrad)");
+    svg.append(defs, path);
+    const emotes = document.createElement("div");
+    emotes.className = "meridian-wave-emotes";
+    waveLayer.append(svg, emotes);
+    bar.appendChild(waveLayer);
+    return waveLayer;
+  }
+
+  // The wave's wall-clock window = [now − span, now]. On sites with a real DVR seekbar the span
+  // is its extent; otherwise the adapter supplies a fixed window (Kick: last 5 min).
+  function waveWindow(s) {
+    if (SITE.waveSpanSec) return SITE.waveSpanSec;
+    return Math.max(10, s.end - s.start);
+  }
+
+  function recomputeResIfDue(now, s) {
+    if (lastResAt && now - lastResAt < 120000) return; // every 2 min
+    lastResAt = now;
+    densityRes = density.resolutionFor(waveWindow(s));
+  }
+  function recomputePeakIfDue(now, s) {
+    if (lastPeakAt && now - lastPeakAt < 20000) return; // every 20 s
+    lastPeakAt = now;
+    const nowSec = now / 1000, span = waveWindow(s);
+    let mx = 0;
+    for (const p of density.series(nowSec - span, nowSec, densityRes)) if (p.v > mx) mx = p.v;
+    densityPeak = mx || 1;
+  }
+
+  function renderWave() {
+    const s = videoSeekable();
+    if (!waveLayer || !s) return;
+    const nowSec = Date.now() / 1000, span = waveWindow(s);
+    const series = density.series(nowSec - span, nowSec, densityRes);
+    lastSeries = series; lastSpan = span; lastNowSec = nowSec;
+    const path = waveLayer.querySelector(".meridian-wave-path");
+    const svg = waveLayer.querySelector("svg");
+    const n = series.length;
+    if (n < 2) { path.setAttribute("d", ""); return; }
+    const H = 100;
+    const peak = densityPeak || 1;
+    const pts = series.map((p, i) => ({ x: i, y: H - Math.min(1, p.v / peak) * (H - 4) }));
+    svg.setAttribute("viewBox", `0 0 ${n - 1} ${H}`);
+    let d = `M 0 ${H} L 0 ${pts[0].y.toFixed(2)}`;
+    for (let i = 1; i < n; i++) {
+      const xc = (pts[i - 1].x + pts[i].x) / 2, yc = (pts[i - 1].y + pts[i].y) / 2;
+      d += ` Q ${pts[i - 1].x} ${pts[i - 1].y.toFixed(2)} ${xc} ${yc.toFixed(2)}`;
+    }
+    d += ` L ${n - 1} ${pts[n - 1].y.toFixed(2)} L ${n - 1} ${H} Z`;
+    path.setAttribute("d", d);
+  }
+
+  // Normalized wave height (0..1) at a horizontal fraction — used to perch emotes on top.
+  function waveHeightAtFrac(frac) {
+    if (!lastSeries || lastSeries.length < 2 || lastSpan <= 0) return 0.4;
+    const step = Math.max(density.baseRes, densityRes);
+    const t = (lastNowSec - lastSpan) + frac * lastSpan; // wall-clock time at this fraction
+    const idx = Math.round((t - lastSeries[0].t) / step);
+    const p = lastSeries[Math.max(0, Math.min(lastSeries.length - 1, idx))];
+    return Math.min(1, (p?.v || 0) / (densityPeak || 1));
+  }
+
+  function renderEmotes() {
+    if (!waveLayer) return;
+    const box = waveLayer.querySelector(".meridian-wave-emotes");
+    const s = videoSeekable();
+    if (!emoteHighlightsActive() || !s) { box.replaceChildren(); return; }
+    const nowMs = Date.now();
+    const recs = [];
+    for (const rec of highlights.values()) {
+      const frac = highlightFrac(rec, s, nowMs);
+      if (frac != null && frac >= 0 && frac <= 1) recs.push({ rec, frac });
+    }
+    recs.sort((a, b) => a.frac - b.frac);
+    const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
+    // Gap is the larger of: no-pixel-overlap, and 1/50 (so total clusters can't exceed ~51).
+    // Raising the gap is exactly the "group when >50 emotes" behaviour from the spec.
+    const gap = Math.max(22 / barW, 1 / 50);
+    const clusters = [];
+    for (const item of recs) {
+      const last = clusters[clusters.length - 1];
+      if (last && item.frac - last.startFrac <= gap) {
+        last.items.push(item);
+        if (item.rec.count > last.lead.count) last.lead = item.rec;
+      } else {
+        clusters.push({ startFrac: item.frac, items: [item], lead: item.rec });
+      }
+    }
+    const frag = document.createDocumentFragment();
+    for (const c of clusters) {
+      const frac = c.items.reduce((a, x) => a + x.frac, 0) / c.items.length;
+      const el = document.createElement("div");
+      el.className = "meridian-wave-emote";
+      el.style.left = (frac * 100) + "%";
+      el.style.bottom = (waveHeightAtFrac(frac) * 88 + 8) + "%"; // perched just above the wave
+      const img = document.createElement("img");
+      img.src = c.lead.url; img.alt = c.lead.name; img.loading = "lazy";
+      el.appendChild(img);
+      const hidden = c.items.length - 1;
+      if (hidden > 0) {
+        const badge = document.createElement("span");
+        badge.className = "meridian-wave-badge";
+        badge.textContent = "+" + hidden;
+        el.appendChild(badge);
+      }
+      el.title = `${c.lead.name} ×${c.lead.count}` + (hidden > 0 ? ` · +${hidden} more here` : "");
+      const lead = c.lead;
+      if (SITE.canSeek === false) {
+        el.style.cursor = "default";
+      } else {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation(); e.preventDefault();
+          const sNow = videoSeekable();
+          if (!sNow) return;
+          // Seek 5 s before where the marker currently points (its live fraction → video time).
+          const fr = highlightFrac(lead, sNow, Date.now());
+          if (fr == null) return;
+          const clamped = Math.min(1, Math.max(0, fr));
+          seekTo(sNow.start + clamped * (sNow.end - sNow.start) - 5);
+        });
+        el.addEventListener("mousedown", (e) => e.stopPropagation());
+      }
+      frag.appendChild(el);
+    }
+    box.replaceChildren(frag);
+  }
+
+  // --- persistence (emote highlights only; the density wave is live/session-derived) ---
+  function hlStorageKey() {
+    const vid = SITE.videoId?.() || lastJoined || HOST;
+    return `meridian.highlights.${HOST}.${vid}`;
+  }
+  function scheduleSaveHighlights() {
+    if (saveHlTimer) return;
+    saveHlTimer = setTimeout(saveHighlights, 1500);
+  }
+  async function saveHighlights() {
+    saveHlTimer = null;
+    if (!highlightsKey) return;
+    const arr = [...highlights.values()]
+      .map(({ key, name, url, videoTime, count, threshold, wallTs }) => ({ key, name, url, videoTime, count, threshold, wallTs }))
+      .slice(-300);
+    try { await chrome.storage.local.set({ [highlightsKey]: arr }); } catch {}
+  }
+  async function loadHighlights() {
+    const key = hlStorageKey();
+    if (key === highlightsKey) return;
+    highlightsKey = key;
+    highlights.clear();
+    hlEngine.reset();
+    if (!waveActive()) return;
+    try {
+      const o = await chrome.storage.local.get(key);
+      for (const rec of o[key] || []) highlights.set(rec.key, rec);
+    } catch {}
+    renderEmotes();
+  }
+
+  // Called when the highlight prefs change (toggle on/off).
+  function refreshHighlightState() {
+    if (waveActive()) { highlightsKey = ""; lastResAt = 0; lastPeakAt = 0; loadHighlights(); }
+    else {
+      if (waveLayer) waveLayer.style.display = "none";
+      highlights.clear(); hlEngine.reset(); density.reset();
+    }
+  }
+
+  // Render loop: rebuild the wave + reposition emotes as the live DVR window slides; re-home
+  // the layer if the player rebuilt its progress bar; reload persisted emotes on video change.
+  setInterval(() => {
+    densityArmed = waveActive();
+    if (!densityArmed) { if (waveLayer) waveLayer.style.display = "none"; return; }
+    const s = videoSeekable();
+    if (!s) return;
+    if (hlStorageKey() !== highlightsKey) loadHighlights();
+    const now = Date.now();
+    // Keep density bounded: drop buckets older than the window we could ever render.
+    density.pruneBefore(now / 1000 - Math.max(waveWindow(s), 600));
+    recomputeResIfDue(now, s);
+    recomputePeakIfDue(now, s);
+    // No seekbar right now (e.g. Kick controls hidden) → render nothing, so the wave + emotes
+    // hide along with the timeline instead of floating over the video.
+    const layer = ensureWaveLayer();
+    if (!layer) return;
+    layer.style.display = "";
+    renderWave();
+    renderEmotes();
+  }, 2000);
+  setInterval(() => hlEngine.prune(Date.now()), 15000);
+  loadHighlights();
 
   // --- rendering ---
+  // Twitch lets users pick any name color, including near-black ones that vanish on our dark
+  // background. Raise only the HSL *lightness* floor — hue/saturation are preserved, so vivid
+  // colors (blue, red, …) stay vivid and only genuinely dark names get lifted (black → grey).
+  // Memoized: there are only ~16M possible colors but realistically a few hundred per channel,
+  // so we compute each hex once instead of per message.
+  const colorCache = new Map();
+  function readableColor(hex) {
+    if (!hex) return hex;
+    let out = colorCache.get(hex);
+    if (out !== undefined) return out;
+    out = computeReadableColor(hex);
+    if (colorCache.size > 4000) colorCache.clear(); // bound memory on pathological inputs
+    colorCache.set(hex, out);
+    return out;
+  }
+  function computeReadableColor(hex) {
+    const m = /^#?([0-9a-fA-F]{6})$/.exec(hex || "");
+    if (!m) return hex;
+    const r = parseInt(m[1].slice(0, 2), 16) / 255;
+    const g = parseInt(m[1].slice(2, 4), 16) / 255;
+    const b = parseInt(m[1].slice(4, 6), 16) / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let l = (max + min) / 2;
+    const MIN_L = 0.5;
+    if (l >= MIN_L) return hex;
+    let h = 0, s = 0;
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h /= 6;
+    }
+    l = MIN_L;
+    const hue = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const to = (x) => Math.round(hue(p, q, x) * 255);
+    return `rgb(${to(h + 1 / 3)}, ${to(h)}, ${to(h - 1 / 3)})`;
+  }
   function renderMessage(m) {
     const el = document.createElement("div");
-    el.className = "meridian-msg" + (m.type === "notice" ? " notice" : "") + (m.self ? " self" : "");
+    el.className = "meridian-msg" + (m.type === "notice" ? " notice" : "") + (m.self ? " self" : "") + (m.action ? " action" : "");
     if (m.id) el.dataset.id = m.id;
 
     if (m.type === "notice") {
@@ -687,7 +1381,7 @@
       const name = document.createElement("span");
       name.className = "meridian-name";
       name.textContent = m.displayName || m.user;
-      if (m.color && !m.self) name.style.color = m.color;
+      if (m.color && !m.self) name.style.color = readableColor(m.color);
       const sep = document.createElement("span");
       sep.className = "meridian-sep";
       sep.textContent = ":";
@@ -802,8 +1496,134 @@
   function currentRect() {
     return { top: root.offsetTop, left: root.offsetLeft, width: root.offsetWidth, height: root.offsetHeight };
   }
-  function showOverlay() { root.classList.remove("meridian-hidden"); toggleBtn.classList.remove("show"); }
-  function hideOverlay() { root.classList.add("meridian-hidden"); toggleBtn.classList.add("show"); }
+  function showOverlay() { root.classList.remove("meridian-hidden"); applyBubbleVisibility(); }
+  function hideOverlay() { root.classList.add("meridian-hidden"); applyBubbleVisibility(); }
+  function applyBubbleVisibility() {
+    // Bubble only shows on an active (has-video) page, while the overlay is hidden, and only
+    // if the user hasn't hidden the bubble itself.
+    const show = pageActive && root.classList.contains("meridian-hidden") && !prefs.bubbleHidden;
+    toggleBtn.classList.toggle("show", show);
+  }
+
+  // --- display mode (overlay / docked / hidden), per site ---
+  // (lastVisibleMode / dockRetryTimer declared earlier to avoid a TDZ at setup.)
+  function siteMode() {
+    const m = prefs.sites?.[HOST]?.mode;
+    if (m === "overlay" || m === "docked" || m === "hidden") return m;
+    return prefs.hidden ? "hidden" : "overlay"; // legacy fallback
+  }
+  async function setSiteMode(mode) {
+    const sites = { ...(prefs.sites || {}) };
+    sites[HOST] = { ...(sites[HOST] || {}), mode };
+    prefs.sites = sites;
+    prefs.hidden = mode === "hidden"; // keep legacy flag coherent
+    await savePrefs();
+    applyMode();
+  }
+  // Visual half — safe to run during setup (touches only DOM/classes, no irc/queue).
+  function applyModeVisual() {
+    // On a page with no video (home/search feed), keep everything torn down + invisible.
+    if (!pageActive) { undock(); hideOverlay(); updateModeButton(); return; }
+    const mode = siteMode();
+    if (mode !== "hidden") lastVisibleMode = mode;
+    if (mode === "hidden") { undock(); hideOverlay(); updateModeButton(); return; }
+    root.classList.remove("meridian-hidden");
+    if (mode === "docked") dock(); else undock();
+    applyBubbleVisibility();
+    updateModeButton();
+  }
+  // Full apply (visual + connection) — used at runtime after everything is initialized.
+  function applyMode() {
+    applyModeVisual();
+    if (!pageActive || siteMode() === "hidden") disconnectIRC();
+    else if (!irc) ensureConnected();
+  }
+  // Mount/connect only when the page actually has a video; tear down when it doesn't (SPA nav).
+  function syncPageActive() {
+    const active = SITE.hasVideo?.() ?? true;
+    if (active === pageActive) return;
+    pageActive = active;
+    applyMode();
+  }
+  function updateModeButton() {
+    const docked = siteMode() === "docked";
+    els.modeBtn.title = docked ? "Switch to overlay" : "Dock into the page";
+    els.modeBtn.classList.toggle("active", docked);
+  }
+  // Docked mode overlays our chat *inside* the site's native chat frame (YouTube
+  // `ytd-live-chat-frame#chat`, Kick `#channel-chatroom`) as an absolute panel, with a
+  // [Site | Twitch] tab bar pinned over the top. Because everything is absolutely positioned
+  // it consumes NO layout — so it can't push the page's chat send-button off-screen in
+  // fullscreen, and it works in theater mode where the chat column collapses to width:0. On
+  // the Twitch tab our opaque panel covers the native chat; on the native tab we hide our
+  // panel and the site's chat shows through (the tab bar still floats over its top ~34px).
+  function buildDockTabs() {
+    const bar = document.createElement("div");
+    bar.className = "meridian-dock-tabs";
+    const native = document.createElement("button");
+    native.className = "meridian-dock-tab";
+    native.dataset.tab = "native";
+    native.textContent = SITE.nativeChatLabel || "Site";
+    const twitch = document.createElement("button");
+    twitch.className = "meridian-dock-tab";
+    twitch.dataset.tab = "twitch";
+    twitch.textContent = "Twitch";
+    bar.append(native, twitch);
+    bar.addEventListener("click", (e) => {
+      const b = e.target.closest(".meridian-dock-tab");
+      if (!b) return;
+      dockChatTab = b.dataset.tab;
+      applyDockTab();
+    });
+    return bar;
+  }
+  function applyDockTab() {
+    if (!dockTabBar) return;
+    const showTwitch = dockChatTab === "twitch";
+    root.style.display = showTwitch ? "" : "none"; // opaque panel covers the native chat
+    dockTabBar.querySelectorAll(".meridian-dock-tab").forEach((b) =>
+      b.classList.toggle("active", (b.dataset.tab === "twitch") === showTwitch));
+  }
+  function dock() {
+    const anchor = SITE.findDockAnchor?.();
+    root.classList.add("meridian-docked");
+    if (playerResizeObs) { playerResizeObs.disconnect(); playerResizeObs = null; }
+    // Clear inline geometry/transform so the docked CSS controls layout (preserve --vars).
+    ["position", "top", "left", "right", "width", "height", "transform"].forEach((p) => root.style.removeProperty(p));
+    if (!anchor) {
+      if (!dockRetryTimer) dockRetryTimer = setTimeout(() => { dockRetryTimer = null; if (siteMode() === "docked") dock(); }, 800);
+      return;
+    }
+    // Our absolute children anchor to the frame — give it a positioning context if it lacks one
+    // (in theater the frame is already position:fixed, so leave that alone).
+    if (anchor !== dockAnchor && getComputedStyle(anchor).position === "static") {
+      anchor.style.position = "relative";
+      dockAnchorPosSet = true;
+    }
+    dockAnchor = anchor;
+    anchor.classList.add("meridian-dock-anchor");
+    if (!dockTabBar || !anchor.contains(dockTabBar)) {
+      dockTabBar = buildDockTabs();
+      anchor.appendChild(dockTabBar);
+    }
+    if (root.parentElement !== anchor) anchor.appendChild(root);
+    applyDockTab();
+    if (dockRetryTimer) { clearTimeout(dockRetryTimer); dockRetryTimer = null; }
+  }
+  function undock() {
+    if (dockRetryTimer) { clearTimeout(dockRetryTimer); dockRetryTimer = null; }
+    const wasDocked = root.classList.contains("meridian-docked");
+    if (dockAnchor) {
+      dockAnchor.classList.remove("meridian-dock-anchor");
+      if (dockAnchorPosSet) { dockAnchor.style.removeProperty("position"); dockAnchorPosSet = false; }
+    }
+    if (dockTabBar) { dockTabBar.remove(); dockTabBar = null; }
+    dockAnchor = null;
+    root.style.display = "";
+    if (!wasDocked && root.parentElement === document.documentElement) return;
+    root.classList.remove("meridian-docked");
+    applyBoundMode(); // re-homes root (player or documentElement) and restores overlay geometry
+  }
 
   async function loadPrefs() {
     const o = await chrome.storage.local.get(PREFS_KEY);
@@ -829,6 +1649,7 @@
   function makeDraggable(handle, onChange, predicate) {
     handle.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
+      if (root.classList.contains("meridian-docked")) return; // no dragging while docked
       if (e.target.closest("input,button,textarea,.meridian-resize")) return;
       if (predicate && !predicate(e)) return;
       e.preventDefault();
@@ -840,7 +1661,7 @@
       const startTop = root.offsetTop;
       const w = root.offsetWidth;
       const h = root.offsetHeight;
-      const _bp = prefs.boundToPlayer ? findPlayerElement() : null;
+      const _bp = prefs.boundToPlayer ? boundHost() : null;
       const bw = _bp ? _bp.offsetWidth : window.innerWidth;
       const bh = _bp ? _bp.offsetHeight : window.innerHeight;
       const onMove = (ev) => {
@@ -865,6 +1686,7 @@
   function makeResizable(grip, corner, onChange) {
     grip.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
+      if (root.classList.contains("meridian-docked")) return; // grips are hidden when docked
       e.preventDefault();
       e.stopPropagation();
       root.classList.add("meridian-dragging");
@@ -874,7 +1696,7 @@
       const top0 = root.offsetTop;
       const sx = e.clientX, sy = e.clientY;
       const minW = 240, minH = 160;
-      const _rbp = prefs.boundToPlayer ? findPlayerElement() : null;
+      const _rbp = prefs.boundToPlayer ? boundHost() : null;
       const maxW = Math.max(minW, (_rbp ? _rbp.offsetWidth : window.innerWidth) - 20);
       const maxH = Math.max(minH, (_rbp ? _rbp.offsetHeight : window.innerHeight) - 40);
       const east = corner === "se" || corner === "ne";
@@ -905,11 +1727,25 @@
   }
   // --- player binding ---
   function findPlayerElement() {
-    return document.querySelector('#movie_player');
+    return SITE.findPlayer();
+  }
+  // When something goes fullscreen, only the fullscreen element subtree is painted — so the
+  // overlay must live *inside* it or it vanishes (the Kick fullscreen bug). But on YouTube the
+  // player itself is the fullscreen element, so keep binding to the player whenever it's within
+  // the fullscreen subtree (root is already a child of it → visible, and drag math stays in the
+  // same coordinate space). Only re-home into the fullscreen element when the player isn't in it.
+  function boundHost() {
+    const player = findPlayerElement();
+    const fs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fs && !(player && fs.contains(player))) {
+      const v = SITE.getVideo?.();
+      if (v && (fs === v || fs.contains(v))) return fs;
+    }
+    return player;
   }
 
   function applyPlayerBoundRect() {
-    const player = findPlayerElement();
+    const player = boundHost();
     if (!player) return;
     const pw = player.offsetWidth, ph = player.offsetHeight;
     if (pw <= 0 || ph <= 0) return;
@@ -929,7 +1765,7 @@
   function applyBoundMode() {
     if (playerResizeObs) { playerResizeObs.disconnect(); playerResizeObs = null; }
     if (prefs.boundToPlayer) {
-      const player = findPlayerElement();
+      const player = boundHost();
       if (!player) {
         // Player not loaded yet — fall back to fixed; retry runs via refreshDetectedHandle.
         if (root.parentElement !== document.documentElement) document.documentElement.appendChild(root);

@@ -69,7 +69,9 @@ export class TwitchIRC {
 
     ws.onopen = () => {
       this.reconnectDelay = 1000;
-      ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+      // membership → JOIN/PART + NAMES (353) so we can seed @-mention suggestions with
+      // lurkers too. Twitch suppresses these for very large channels; we degrade gracefully.
+      ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership");
       if (!this.anonymous) ws.send(`PASS oauth:${this.token}`);
       ws.send(`NICK ${this.login}`);
       this._startPing();
@@ -117,7 +119,14 @@ export class TwitchIRC {
         break;
       case "JOIN":
         if (parsed.nick === this.login) this.onStatus({ state: "joined", channel: this.channel });
+        else if (parsed.nick) this.onMessage({ type: "join", channel: this.channel, user: parsed.nick, ts: Date.now() });
         break;
+      case "353": { // RPL_NAMREPLY — current chatters at join time (membership cap)
+        const ch = (parsed.args.find((a) => a.startsWith("#")) || "").replace(/^#/, "");
+        const users = (parsed.trailing || "").split(" ").filter(Boolean);
+        if (users.length) this.onMessage({ type: "names", channel: ch || this.channel, users, ts: Date.now() });
+        break;
+      }
       case "NOTICE":
         this.onMessage({ type: "notice", text: parsed.trailing, ts: Date.now() });
         break;
@@ -127,17 +136,37 @@ export class TwitchIRC {
       case "CLEARMSG":
         this.onMessage({ type: "clearmsg", targetMsgId: parsed.tags["target-msg-id"], ts: Date.now() });
         break;
+      case "ROOMSTATE": {
+        // Sent on JOIN; `room-id` is the channel's numeric Twitch user id — lets us
+        // load 3rd-party channel emotes without Helix (works in anonymous mode).
+        const ch = (parsed.args[0] || "").replace(/^#/, "");
+        const roomId = parsed.tags["room-id"];
+        if (roomId) this.onMessage({ type: "roomstate", channel: ch, roomId, ts: Date.now() });
+        break;
+      }
       case "PRIVMSG": {
         const tags = parsed.tags;
+        // CTCP /me actions arrive wrapped as "ACTION <text>". Unwrap so the inner
+        // text (and its trailing emote) is clean — otherwise the control chars stay in the text
+        // and break emote matching (e.g. "FeelsGoodMan" won't match). Twitch's emote-tag
+        // offsets are relative to the unwrapped text, so parse emotes after stripping.
+        let text = parsed.trailing || "";
+        let action = false;
+        const SOH = String.fromCharCode(1);
+        if (text.startsWith(SOH + "ACTION ") && text.endsWith(SOH)) {
+          text = text.slice(8, -1);
+          action = true;
+        }
         this.onMessage({
           type: "msg",
           id: tags.id,
           user: parsed.nick,
           displayName: tags["display-name"] || parsed.nick,
           color: tags.color || null,
-          text: parsed.trailing,
+          text,
+          action,
           badges: parseBadges(tags.badges),
-          emotes: parseEmotes(tags.emotes, parsed.trailing),
+          emotes: parseEmotes(tags.emotes, text),
           self: false,
           ts: Number(tags["tmi-sent-ts"]) || Date.now()
         });

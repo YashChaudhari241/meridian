@@ -32,15 +32,21 @@ async function refreshStatus() {
 
 $("#mode").addEventListener("change", async (e) => { await send("MODE_SET", { mode: e.target.value }); refreshStatus(); });
 
+$("#showBubble").addEventListener("change", async (e) => { await setPrefs({ bubbleHidden: !e.target.checked }); });
+
 // ---------- prefs load/save ----------
 const defaults = {
   channel: "", mappings: {}, overrideChannel: "",
   chatDelaySec: 0, updateFrequencyMs: 0, autoscroll: true,
-  hotkeyToggle: "", hotkeyFocusInput: "",
+  hotkeyHide: "", hotkeyOverlay: "", hotkeyDocked: "",
   opacity: 0.55, fontSize: 13, blurRadius: 6, maxMessages: 300,
   blurEnabled: true, bgEnabled: true, shadowEnabled: true,
   boundToPlayer: true,
-  blockedWords: [], hideDeleted: false
+  blockedWords: [], hideDeleted: false,
+  hidden: false, bubbleHidden: false,
+  sites: {},
+  highlightTimeline: false, highlightEnabled: false, highlightThreshold: 3, highlightAnchorLive: true,
+  emote7tv: true, emoteBttv: true, emoteFfz: true
 };
 
 async function getPrefs() {
@@ -84,11 +90,30 @@ async function loadAllFields() {
   $("#blurEnabled").checked = p.blurEnabled !== false;
   $("#bgEnabled").checked = p.bgEnabled !== false;
   $("#shadowEnabled").checked = p.shadowEnabled !== false;
-  $("#hotkeyToggle").value = p.hotkeyToggle || "";
-  $("#hotkeyFocusInput").value = p.hotkeyFocusInput || "";
+  $("#hotkeyHide").value = p.hotkeyHide || "";
+  $("#hotkeyOverlay").value = p.hotkeyOverlay || "";
+  $("#hotkeyDocked").value = p.hotkeyDocked || "";
   $("#boundToPlayer").checked = p.boundToPlayer !== false;
   $("#hideDeleted").checked = p.hideDeleted === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
+  $("#showBubble").checked = p.bubbleHidden !== true;
+  $("#highlightTimeline").checked = p.highlightTimeline === true;
+  $("#highlightEnabled").checked = p.highlightEnabled === true;
+  $("#highlightAnchorLive").checked = p.highlightAnchorLive !== false;
+  $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 3);
+  $("#emote7tv").checked = p.emote7tv !== false;
+  $("#emoteBttv").checked = p.emoteBttv !== false;
+  $("#emoteFfz").checked = p.emoteFfz !== false;
+  syncHighlightGating(p.highlightTimeline === true);
+}
+// Emote highlights only make sense when the wave is on (spec: "emote timeline can only be
+// enabled if highlight timeline is on").
+function syncHighlightGating(timelineOn) {
+  for (const sel of ["#highlightEnabled", "#highlightAnchorLive"]) {
+    const dep = $(sel);
+    dep.disabled = !timelineOn;
+    dep.closest("label").style.opacity = timelineOn ? "" : "0.5";
+  }
 }
 
 // ---------- General ----------
@@ -96,7 +121,59 @@ function flash(btn, text = "Saved ✓") {
   const old = btn.textContent; btn.textContent = text;
   setTimeout(() => (btn.textContent = old), 1200);
 }
-// ---------- YouTube ----------
+// ---------- Site settings + per-site display mode ----------
+let activeTab = null, activeHost = null, hostSupported = false;
+function hostFromUrl(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return null; } }
+function isSupportedHost(h) { return /(^|\.)youtube\.com$/.test(h) || /(^|\.)kick\.com$/.test(h); }
+
+async function detectActiveTab() {
+  try { [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch { activeTab = null; }
+  activeHost = activeTab?.url ? hostFromUrl(activeTab.url) : null;
+  hostSupported = activeHost ? isSupportedHost(activeHost) : false;
+}
+
+// Effective per-site mode: "off" | "overlay" | "docked" | "hidden".
+function siteModeValue(p) {
+  const e = p.sites?.[activeHost];
+  if (e && e.enabled === false) return "off";
+  if (e && (e.mode === "overlay" || e.mode === "docked" || e.mode === "hidden")) return e.mode;
+  return p.hidden ? "hidden" : "overlay";
+}
+
+async function initSiteCard() {
+  const card = $("#siteCard");
+  const sel = $("#siteMode");
+  if (!activeHost || !/^https?:/.test(activeTab?.url || "")) {
+    card.style.display = "none"; sel.disabled = true; return;
+  }
+  card.style.display = "";
+  $("#siteEnabledLabel").textContent = activeHost;
+  if (!hostSupported) {
+    sel.disabled = true;
+    $("#siteHint").textContent = "Not a supported site. Meridian works on youtube.com and kick.com.";
+    return;
+  }
+  sel.disabled = false;
+  $("#siteHint").textContent = "Supported site.";
+  const p = await getPrefs();
+  sel.value = siteModeValue(p);
+}
+
+$("#siteMode").addEventListener("change", async (e) => {
+  if (!activeHost || !hostSupported) return;
+  const v = e.target.value;
+  const cur = await getPrefs();
+  const wasOff = cur.sites?.[activeHost]?.enabled === false;
+  const sites = { ...(cur.sites || {}) };
+  sites[activeHost] = v === "off"
+    ? { ...(sites[activeHost] || {}), enabled: false }
+    : { ...(sites[activeHost] || {}), enabled: true, mode: v };
+  await setPrefs({ sites });
+  // Off ⇄ on needs a reload (mount/unmount); overlay⇄docked⇄hidden apply live.
+  if ((v === "off" || wasOff) && activeTab?.id) chrome.tabs.reload(activeTab.id);
+});
+
+// ---------- YouTube / player binding ----------
 $("#boundToPlayer").addEventListener("change", async (e) => { await setPrefs({ boundToPlayer: e.target.checked }); });
 $("#saveMappings").addEventListener("click", async () => {
   const { mappings, errors } = parseMappings($("#mappings").value);
@@ -133,6 +210,33 @@ $("#saveMaxMessages").addEventListener("click", async () => {
   flash($("#saveMaxMessages"));
 });
 $("#hideDeleted").addEventListener("change", async (e) => { await setPrefs({ hideDeleted: e.target.checked }); });
+$("#highlightTimeline").addEventListener("change", async (e) => {
+  const on = e.target.checked;
+  // Turning the wave off also disables the dependent emote highlights.
+  await setPrefs(on ? { highlightTimeline: true } : { highlightTimeline: false, highlightEnabled: false });
+  if (!on) $("#highlightEnabled").checked = false;
+  syncHighlightGating(on);
+});
+$("#highlightEnabled").addEventListener("change", async (e) => { await setPrefs({ highlightEnabled: e.target.checked }); });
+$("#highlightAnchorLive").addEventListener("change", async (e) => { await setPrefs({ highlightAnchorLive: e.target.checked }); });
+$("#saveHighlightThreshold").addEventListener("click", async () => {
+  const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 3));
+  await setPrefs({ highlightThreshold: v });
+  $("#highlightThreshold").value = v;
+  flash($("#saveHighlightThreshold"));
+});
+$("#emote7tv").addEventListener("change", async (e) => { await setPrefs({ emote7tv: e.target.checked }); });
+$("#emoteBttv").addEventListener("change", async (e) => { await setPrefs({ emoteBttv: e.target.checked }); });
+$("#emoteFfz").addEventListener("change", async (e) => { await setPrefs({ emoteFfz: e.target.checked }); });
+$("#clearHighlightCache").addEventListener("click", async () => {
+  // Remove every persisted highlight set (keys: meridian.highlights.<host>.<id>).
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter((k) => k.startsWith("meridian.highlights."));
+  if (keys.length) await chrome.storage.local.remove(keys);
+  const msg = $("#clearHighlightMsg");
+  msg.textContent = `Cleared ${keys.length} cached timeline${keys.length === 1 ? "" : "s"} ✓`;
+  setTimeout(() => (msg.textContent = ""), 2500);
+});
 $("#saveBlockedWords").addEventListener("click", async () => {
   const words = $("#blockedWords").value
     .split(/\r?\n/)
@@ -190,8 +294,9 @@ function bindHotkey(prefKey, inputSel, captureSel, clearSel) {
     await setPrefs({ [prefKey]: "" });
   });
 }
-bindHotkey("hotkeyToggle",     "#hotkeyToggle",     "#hotkeyCapture",      "#hotkeyClear");
-bindHotkey("hotkeyFocusInput", "#hotkeyFocusInput", "#hotkeyFocusCapture", "#hotkeyFocusClear");
+bindHotkey("hotkeyHide",    "#hotkeyHide",    "#hotkeyHideCapture",    "#hotkeyHideClear");
+bindHotkey("hotkeyOverlay", "#hotkeyOverlay", "#hotkeyOverlayCapture", "#hotkeyOverlayClear");
+bindHotkey("hotkeyDocked",  "#hotkeyDocked",  "#hotkeyDockedCapture",  "#hotkeyDockedClear");
 function comboFromEvent(e) {
   const parts = [];
   if (e.ctrlKey) parts.push("Ctrl");
@@ -207,15 +312,20 @@ function comboFromEvent(e) {
 
 // ---------- init ----------
 (async () => {
+  await detectActiveTab();
   const o = await chrome.storage.local.get(UI_KEY);
   await activateTab(o[UI_KEY]?.tab || "general", false);
   await refreshStatus();
   await loadAllFields();
+  await initSiteCard();
 })();
 
-chrome.storage.onChanged.addListener((changes, area) => {
+chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local" || !changes[PREFS_KEY]) return;
   const a = document.activeElement;
   if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA") && a.type !== "checkbox") return;
   loadAllFields();
+  if (activeHost && hostSupported && a !== $("#siteMode")) {
+    $("#siteMode").value = siteModeValue(await getPrefs());
+  }
 });

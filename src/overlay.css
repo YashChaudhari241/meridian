@@ -10,7 +10,7 @@
   --meridian-opacity: 0.55;
   --meridian-font: 13px;
   --meridian-header-h: 30px;
-  --meridian-input-h: 38px;
+  --meridian-input-h: 44px;
   --meridian-blur: 6px;
   color: #f1f1f1;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -64,8 +64,8 @@
   right: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 5px;
+  padding: 4px 5px;
   box-sizing: border-box;
   background: rgba(0, 0, 0, 0.55);
   z-index: 2;
@@ -88,6 +88,11 @@
 .meridian-input-wrap {
   bottom: 0;
   height: var(--meridian-input-h);
+  /* Roomier than the title bar — the input field needs breathing space on all sides. */
+  padding: 7px 8px;
+  gap: 6px;
+  /* Stretch so the send button matches the input's height exactly. */
+  align-items: stretch;
   border-bottom-left-radius: 8px;
   border-bottom-right-radius: 8px;
   border-top: 1px solid rgba(255,255,255,0.06);
@@ -222,6 +227,9 @@
   overflow-wrap: anywhere;
 }
 .meridian-msg.notice { opacity: 0.75; font-style: italic; }
+/* /me (CTCP ACTION) messages render italic, like other chat clients. */
+.meridian-msg.action .meridian-text { font-style: italic; }
+.meridian-msg.action .meridian-sep { display: none; }
 .meridian-name { font-weight: 700; }
 .meridian-msg.self .meridian-name {
   background: #ffffff;
@@ -288,9 +296,26 @@
   outline: none;
   user-select: text;
   min-width: 0;
+  /* contenteditable: keep it single-line and scrollable */
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  line-height: 1.5;
+  scrollbar-width: none;
 }
+.meridian-input::-webkit-scrollbar { display: none; }
 .meridian-input:focus { border-color: rgba(255,255,255,0.3); }
-.meridian-input:disabled { opacity: 0.5; }
+.meridian-input.disabled { opacity: 0.5; pointer-events: none; }
+.meridian-input:empty::before {
+  content: attr(data-placeholder);
+  opacity: 0.45;
+  pointer-events: none;
+}
+.meridian-input-emote {
+  height: 1.5em;
+  vertical-align: middle;
+  margin: 0 1px;
+}
 .meridian-send {
   background: #9146ff;
   color: #fff;
@@ -374,3 +399,154 @@
   border-color: rgba(145, 70, 255, 0.6);
 }
 .meridian-toggle.show { display: inline-flex; }
+
+.meridian-btn.active { color: #c9a6ff; background: rgba(145, 70, 255, 0.18); }
+
+/* ---- Docked mode: an absolute overlay inside the site's native chat frame, with a tab bar
+   pinned over the top. Nothing consumes layout (so the site's chat send-button can't be pushed
+   off-screen in fullscreen), and it works in theater mode where the chat column collapses. The
+   tab bar floats over the frame's top ~34px; our opaque panel sits below it covering the native
+   chat on the Twitch tab. ---- */
+.meridian-dock-tabs {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  display: flex;
+  z-index: 2147483600;
+  background: rgb(18, 18, 22);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.meridian-dock-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #bbb;
+  font: 600 12px "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  outline: none;
+}
+.meridian-dock-tab:hover { color: #fff; }
+.meridian-dock-tab.active { color: #fff; border-bottom-color: #9146ff; }
+/* Reserve the tab bar's 34px inside YouTube's native chat so its top dropdown isn't covered
+   on the native tab — the chat *shrinks* to fit (it isn't pushed down), so the send button
+   stays on screen even in fullscreen. (Verified live: iframe is position:static, so margin.) */
+.meridian-dock-anchor iframe#chatframe {
+  margin-top: 34px !important;
+  height: calc(100% - 34px) !important;
+  box-sizing: border-box !important;
+}
+
+.meridian-root.meridian-docked {
+  position: absolute;
+  top: 34px;        /* below the tab bar */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  z-index: 2147483599; /* above the native chat iframe, below the tab bar */
+  border-radius: 0;
+}
+/* Solid background that fully hides the native chat behind it (no theme bleed-through). */
+.meridian-docked .meridian-bg {
+  top: 0;
+  bottom: 0;
+  background: rgb(18, 18, 22);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+}
+/* Header sits directly under the tab bar — no top rounding of its own. */
+.meridian-docked .meridian-header {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+/* Bars always visible (no auto-hide), grips removed, header not draggable. */
+.meridian-docked .meridian-header,
+.meridian-docked .meridian-input-wrap { opacity: 1; }
+.meridian-docked .meridian-header > *,
+.meridian-docked .meridian-input-wrap > * { pointer-events: auto; }
+.meridian-docked .meridian-header { cursor: default; }
+.meridian-docked .meridian-resize { display: none; }
+
+/* ---- Timeline activity wave + emote highlights (overlaid above the seekbar) ----
+   Mimics YouTube's "most replayed" graph: a rounded white wave that fades top→bottom,
+   sitting just above the scrubber, with emote highlights perched on its surface. */
+.meridian-wave-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6px;          /* rise just above the progress bar */
+  height: 32px;         /* ~25% shorter than before */
+  pointer-events: none;
+  overflow: visible;
+  z-index: 60;
+}
+.meridian-wave-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.35));
+}
+/* `vector-effect` keeps the rounded crest crisp regardless of the non-uniform stretch. */
+.meridian-wave-path { vector-effect: non-scaling-stroke; }
+
+.meridian-wave-emotes { position: absolute; inset: 0; }
+.meridian-wave-emote {
+  position: absolute;
+  transform: translate(-50%, 0); /* bottom-anchored so it perches on top of the wave */
+  pointer-events: auto;
+  cursor: pointer;
+  line-height: 0;
+}
+.meridian-wave-emote img {
+  height: 15px;
+  width: auto;
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+  transition: transform 90ms ease;
+}
+.meridian-wave-emote:hover img { transform: scale(1.25); }
+.meridian-wave-badge {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  background: #9146ff;
+  color: #fff;
+  font: 700 9px/1 "Inter", system-ui, sans-serif;
+  padding: 1px 3px;
+  border-radius: 999px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+/* ---- Resume-autoscroll pill (shown inside the messages box when autoscroll is paused) ---- */
+.meridian-resume {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--meridian-input-h) + 8px);
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 5px;
+  background: #9146ff;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 11px 4px 9px;
+  font: 600 11px/1 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  cursor: pointer;
+  z-index: 4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+}
+.meridian-resume.show { display: inline-flex; }
+.meridian-resume:hover { background: #a970ff; }
+.meridian-resume svg { display: block; }
