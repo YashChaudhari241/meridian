@@ -178,8 +178,8 @@ function add7tv(out, e) {
   if (!e || !e.name) return;
   const host = (e.data && e.data.host) || {};
   if (!host.url) return;
+  const base = host.url.startsWith("//") ? `https:${host.url}` : host.url;
   const files = (Array.isArray(host.files) ? host.files : []).filter((f) => f && f.name);
-  if (files.length === 0) return;
   const isWebp = (f) => typeof f.format === "string" && f.format.toUpperCase() === "WEBP";
   const file = files.find((f) => isWebp(f) && f.name === "2x.webp")
             || files.find((f) => f.name === "2x.webp")
@@ -187,9 +187,11 @@ function add7tv(out, e) {
             || files.find((f) => f.name.startsWith("2x."))
             || files.find(isWebp)
             || files[0];
-  if (!file) return;
-  const base = host.url.startsWith("//") ? `https:${host.url}` : host.url;
-  out[e.name] = { url: `${base}/${file.name}`, provider: "7TV" };
+  // Some emotes (often newly-added / animated) come back with an empty `files` list even though
+  // they're in the set — the 7TV CDN still serves `2x.webp` for them, so construct it directly
+  // instead of dropping the emote. (Fixes occasional missing emotes like MUGA / AAAA.)
+  const fileName = file?.name || "2x.webp";
+  out[e.name] = { url: `${base}/${fileName}`, provider: "7TV" };
 }
 
 // ---------- BetterTTV ----------

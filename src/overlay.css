@@ -146,6 +146,22 @@
 .meridian-channel-reset:hover { color: #fff; }
 .meridian-channel-reset[hidden] { display: none; }
 
+/* Follow heart (signed-in only) — sits where the reset icon would, opens twitch.tv to follow. */
+.meridian-channel-follow {
+  background: transparent;
+  border: none;
+  color: #c9c9d0;
+  cursor: pointer;
+  padding: 0 3px;
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.meridian-channel-follow svg { fill: none; stroke: currentColor; stroke-width: 2; display: block; }
+.meridian-channel-follow:hover { color: #ff6b81; }
+.meridian-channel-follow[hidden] { display: none; }
+
 .meridian-delay {
   display: flex;
   align-items: center;
@@ -524,10 +540,9 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
 }
 /* `vector-effect` keeps the rounded crest crisp regardless of the non-uniform stretch. */
 .meridian-wave-path { vector-effect: non-scaling-stroke; }
-/* Crisp white outline along the top crest of the wave. */
+/* Crisp outline along the top crest of the wave (stroke color set inline from the wave color). */
 .meridian-wave-topline {
   fill: none;
-  stroke: #ffffff;
   stroke-width: 1.4px;
   stroke-opacity: 0.92;
   stroke-linejoin: round;

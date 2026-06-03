@@ -90,7 +90,7 @@ export class DensityTracker {
   // a fixed number of points so a 10 min stream lands near 10 s/point and a 6 h stream near
   // 2 min/point — and is always a whole multiple of the base resolution.
   resolutionFor(durationSec) {
-    const target = durationSec / 180;            // ~180 points across the whole stream
+    const target = durationSec / 240;            // ~240 points across the whole stream (higher res)
     const mult = Math.max(1, Math.round(target / this.baseRes));
     return mult * this.baseRes;
   }

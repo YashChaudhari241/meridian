@@ -35,42 +35,54 @@
       height
     };
   }
+  // Default YouTube handle / Kick slug → Twitch channel mappings (one shared map; keys are the
+  // lower-cased handle/slug, values the Twitch login). Seeds esports + a few popular channels.
+  const DEFAULT_MAPPINGS = {
+    eslcs: "eslcs",
+    pgl: "pgl",
+    blastpremier: "blastpremier",
+    starladder_cs: "starladder_cs_en",
+    starladder: "starladder_cs_en",
+    valorantesports: "valorant",
+    tenz: "tenz",
+    ohnepixel: "ohnepixel"
+  };
   const defaults = {
     channel: "",
-    mappings: {},
+    mappings: { ...DEFAULT_MAPPINGS },
     overrideChannel: "",
     rect: null,                  // computed on first load
     hidden: false,
     chatDelaySec: 0,
     updateFrequencyMs: 0,
-    autoscroll: true,
-    hotkeyHide: "",
-    hotkeyOverlay: "",
-    hotkeyDocked: "",
+    autoscroll: true,            // always on (no longer user-toggleable)
+    hotkeyToggle: "",            // toggle chat visibility (= × / chat bubble)
+    hotkeyFocus: "",             // show chat + focus the input
     blockedWords: [],
-    hideDeleted: false,
-    opacity: 0.55,
+    hideDeleted: true,
+    opacity: 0.51,
     fontSize: 13,
-    blurRadius: 6,
+    blurRadius: 0,
     maxMessages: 300,
-    blurEnabled: true,
+    blurEnabled: false,
     bgEnabled: true,
-    shadowEnabled: true,
+    shadowEnabled: false,
     outlineEnabled: true,        // 1px border around the chat background panel
     boundToPlayer: true,
     playerAnchor: null,
     extensionEnabled: true,      // master switch — turn Meridian off everywhere
     sites: {},                   // per-host: { "<host>": { mode, hidden } } (hidden = transient, toggled by the bubble)
-    highlightTimeline: false,    // master: msgs/sec density wave on the live seekbar
-    highlightEnabled: false,     // emote-surge markers on the wave (requires highlightTimeline)
-    highlightThreshold: 3,       // fixed: unique viewers per ~12 s window (floor 3)
+    highlightTimeline: true,     // master: msgs/sec density wave on the live seekbar
+    highlightEnabled: true,      // emote-surge markers on the wave (requires highlightTimeline)
+    highlightThreshold: 5,       // fixed: unique viewers per ~12 s window (floor 3)
     highlightAnchorLive: true,   // anchor highlights at the live edge (scroll left) vs. the viewer's seek position
     highlightOffsetSec: 5,       // shift highlights this many sec into the past (human reaction time)
+    highlightColor: "#b388ff",   // wave + emote-marker accent color (light purple)
     emote7tv: true,              // 3rd-party emote providers (each toggleable; all on by default)
     emoteBttv: true,
     emoteFfz: true,
-    textStyle: "none",           // chat text legibility: "none" | "shadow" | "outline"
-    boldText: false,             // message body weight (names are always one step heavier)
+    textStyle: "shadow",         // chat text legibility: "none" | "shadow" | "outline"
+    boldText: true,              // message body weight (names are always one step heavier)
     ytLoadOn: "live"             // YouTube: load chat on "live" (livestreams only) | "all" (any video)
   };
 
@@ -253,6 +265,8 @@
   let dockAnchorPosSet = false; // whether we set inline position:relative on the anchor
   let dockForcedFixed = false;  // whether we've pinned the frame fixed into the reserved theater strip
   let dockLayoutObs = null;     // reacts to theater/hide-chat toggles so the layout updates instantly
+  let sizeDebTimer = null;      // trailing debounce so load-time attribute flapping doesn't thrash layout
+  let repinRaf = 0;             // rAF guard for re-pinning the theater-fixed chat on scroll
   // Declared up here (not next to the dock helpers) because dock()/sizeDockAnchor() can run during
   // setup — a `const` lower in the file would be in its temporal dead zone and throw, aborting init.
   const THEATER_CHAT_W = 402;   // YouTube's default live-chat column width
@@ -292,6 +306,7 @@
         <span class="meridian-channel-prefix">twitch.tv/</span>
         <input class="meridian-channel" placeholder="channel name" spellcheck="false" />
         <button class="meridian-channel-reset" data-act="auto" title="Reset to auto channel" hidden>⟲</button>
+        <button class="meridian-channel-follow" data-act="follow" title="Follow on Twitch" hidden><svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
       </span>
       <div class="meridian-delay" title="Chat delay (seconds)">
         <span class="meridian-delay-icon">⏱</span>
@@ -328,6 +343,7 @@
     header: root.querySelector(".meridian-header"),
     channel: root.querySelector(".meridian-channel"),
     channelReset: root.querySelector(".meridian-channel-reset"),
+    follow: root.querySelector(".meridian-channel-follow"),
     delayVal: root.querySelector(".meridian-delay-val"),
     status: root.querySelector(".meridian-status"),
     messages: root.querySelector(".meridian-messages"),
@@ -438,6 +454,16 @@
     updateChannelInputFromPrefs();
     syncChannel();
   });
+  // Heart (signed-in only): opens the channel on twitch.tv in a new tab, where the user can
+  // follow/unfollow. (Twitch removed the programmatic follow API in 2021.)
+  els.follow.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const ch = resolveChannel();
+    if (!ch) return;
+    window.open(`https://www.twitch.tv/${encodeURIComponent(ch)}`, "_blank", "noopener");
+  });
+  els.follow.addEventListener("mousedown", (e) => e.stopPropagation());
   root.querySelector('[data-act="delay-down"]').addEventListener("click", async (e) => {
     e.stopPropagation();
     await setDelay(Math.max(0, (prefs.chatDelaySec || 0) - 1));
@@ -477,15 +503,29 @@
     updateChannelInputFromPrefs();
   }
   function updateChannelInputFromPrefs() {
-    if (document.activeElement === els.channel) { updateResetVisibility(); return; }
+    if (document.activeElement === els.channel) { updateChannelControls(); return; }
     els.channel.value = resolveChannel();
-    updateResetVisibility();
+    updateChannelControls();
   }
-  function updateResetVisibility() {
+  function isSignedIn() { return currentAuth?.kind === "oauth"; }
+  // The heart (signed-in only) takes the reset icon's spot. Reset still works when signed out.
+  function updateChannelControls() {
+    const ch = resolveChannel();
+    const showHeart = isSignedIn() && !!ch;
+    els.follow.hidden = !showHeart;
+    updateResetVisibility(showHeart);
+    updateHeart();
+  }
+  function updateResetVisibility(suppress) {
+    if (suppress) { els.channelReset.hidden = true; return; }
     const cur = els.channel.value.trim().toLowerCase();
     const auto = autoChannel();
     const isOverride = cur && cur !== auto;
     els.channelReset.hidden = !isOverride && !prefs.overrideChannel;
+  }
+  function updateHeart() {
+    const ch = resolveChannel();
+    els.follow.title = ch ? `Open ${ch} on Twitch` : "Open on Twitch";
   }
 
   // --- send ---
@@ -747,7 +787,7 @@
     if (!text) return;
     if (!irc) { setStatus("not connected"); return; }
     if (currentAuth?.kind === "anonymous") {
-      setStatus("read-only — log into twitch.tv (or use OAuth in the popup) to send");
+      setStatus("Read only - connect twitch to send messages.");
       return;
     }
     if (!irc.say(text)) { setStatus("send failed (not connected)"); return; }
@@ -866,6 +906,7 @@
         onChange: () => { /* nothing to do — emotes resolved at render time */ }
       });
       applyAuthUI(currentAuth);
+      updateChannelControls(); // show/hide the heart based on sign-in state
       if (irc) irc.disconnect();
       irc = new TwitchIRC({
         token: currentAuth.accessToken,
@@ -888,7 +929,7 @@
     els.input.classList.toggle("disabled", anon);
     els.send.disabled = anon;
     els.input.dataset.placeholder = anon
-      ? "Read-only — log into twitch.tv to chat"
+      ? "Read only - connect twitch to send messages."
       : `Send as ${auth.displayName || auth.login}…`;
   }
 
@@ -913,13 +954,14 @@
       chatters.clear(); // reset suggestions for the new channel (NAMES will reseed)
       emoteReg?.loadForChannel(target).catch(() => {});
     }
+    updateChannelControls();
   }
 
   // --- storage changes ---
   chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== "local") return;
-    if (changes["meridian.auth"] || changes["meridian.authMode"] || changes["meridian.cookieRev"]) {
-      reconnect();
+    if (changes["meridian.oauth"]) {
+      reconnect(); // user connected/disconnected their Twitch account
     }
     // Highlight cache cleared from the popup — drop in-memory markers for this video.
     if (highlightsKey && changes[highlightsKey] && changes[highlightsKey].newValue == null) {
@@ -950,6 +992,7 @@
       const prevMode = effectiveMode();
       const highlightChanged = next.highlightEnabled !== prefs.highlightEnabled
         || next.highlightTimeline !== prefs.highlightTimeline;
+      const colorChanged = next.highlightColor !== prefs.highlightColor;
       prefs = next;
       const modeChanged = effectiveMode() !== prevMode;
       if (channelInputsChanged) { syncChannel(); updateChannelInputFromPrefs(); }
@@ -960,6 +1003,7 @@
       if (loadOnChanged) syncPageActive(); // live-only ⇄ all may mount/unmount this page
       if (modeChanged) applyMode();
       if (highlightChanged) refreshHighlightState();
+      if (colorChanged) applyWaveColor();
     }
   });
 
@@ -986,12 +1030,18 @@
     if (em === "docked") {
       const anchor = SITE.findDockAnchor?.();
       if (anchor && (root.parentElement !== anchor || !anchor.contains(dockTabBar))) dock();
-      else sizeDockAnchor(); // keep our panel full-height even if the user hides native chat
+      else scheduleSizeDock(); // keep our panel sized; debounced so load-time flapping can't thrash
     }
   }
   refreshDetectedHandle();
   if (SITE.navEvent) window.addEventListener(SITE.navEvent, () => setTimeout(refreshDetectedHandle, 400));
   setInterval(refreshDetectedHandle, 2000);
+
+  // Keep the theater-fixed docked chat aligned with the player as the page scrolls (rAF-throttled).
+  window.addEventListener("scroll", () => {
+    if (!dockForcedFixed || repinRaf) return;
+    repinRaf = requestAnimationFrame(() => { repinRaf = 0; repinTheaterChat(); });
+  }, { passive: true, capture: true });
 
   // Re-home the overlay when entering/leaving fullscreen so it stays visible inside the
   // fullscreen element (fixes the Kick overlay vanishing in fullscreen).
@@ -1010,18 +1060,24 @@
     })
   );
 
-  // --- hotkey ---
+  // --- hotkeys ---
+  // 1. Toggle visibility — same as the × button / chat bubble (hide ⇄ return to the chosen mode).
+  // 2. Focus input — reveal chat (if hidden) and put the caret in the message box.
+  function toggleVisibility() {
+    if (effectiveMode() === "hidden") setSiteMode(siteMode());
+    else setSiteMode("hidden");
+  }
+  function focusChatInput() {
+    const reveal = () => { root.classList.remove("meridian-idle"); bumpActivity(); focusInputEnd(); };
+    if (effectiveMode() === "hidden") setSiteMode(siteMode()).then(reveal);
+    else reveal();
+  }
   document.addEventListener("keydown", (e) => {
     if (isOurInput(e.target)) return;
     const combo = comboFromEvent(e);
     if (!combo) return;
-    let target = null;
-    if (prefs.hotkeyHide && combo === prefs.hotkeyHide) target = "hidden";
-    else if (prefs.hotkeyOverlay && combo === prefs.hotkeyOverlay) target = "overlay";
-    else if (prefs.hotkeyDocked && combo === prefs.hotkeyDocked) target = "docked";
-    if (!target) return;
-    e.preventDefault();
-    if (siteMode() !== target) setSiteMode(target);
+    if (prefs.hotkeyToggle && combo === prefs.hotkeyToggle) { e.preventDefault(); toggleVisibility(); }
+    else if (prefs.hotkeyFocus && combo === prefs.hotkeyFocus) { e.preventDefault(); focusChatInput(); }
   }, true);
 
   // --- inactivity → hide bars after 10s, blur input but keep typed text ---
@@ -1103,7 +1159,7 @@
   //      a "+N" badge); grouping also caps the total rendered at ~50. Requires the wave.
   const SVGNS = "http://www.w3.org/2000/svg";
   const HIGHLIGHT_CAP = 300;    // max emote highlights kept in memory (and persisted) per video
-  const density = new DensityTracker({ baseRes: 5 });
+  const density = new DensityTracker({ baseRes: 2 });
   const highlights = new Map(); // key -> { name, url, count, threshold, wallTs, vt, behindLive }
   const hlEngine = new HighlightEngine({
     windowMs: 12000,
@@ -1112,8 +1168,19 @@
     onUpdate: bumpHighlight
   });
   let waveLayer = null;
-  let lastSeries = null, lastSpan = 0, lastNowSec = 0;
+  let lastSeries = null, lastSpan = 0, lastStart = 0, lastOff = 0;
   let densityRes = 5, densityPeak = 1, lastPeakAt = 0, lastResAt = 0;
+  // Cached seekbar stream-time live edge so the per-message hot path can timestamp density in the
+  // SAME coordinate space as the emote markers (no DOM read per message). Refreshed by the 2 s loop.
+  let liveEdgeVt = 0, liveEdgeAt = 0;
+  function waveColor() { return prefs.highlightColor || "#b388ff"; }
+  function applyWaveColor() {
+    if (!waveLayer) return;
+    const c = waveColor();
+    waveLayer.querySelectorAll("#meridianWaveGrad stop").forEach((st) => st.setAttribute("stop-color", c));
+    const tl = waveLayer.querySelector(".meridian-wave-topline");
+    if (tl) tl.setAttribute("stroke", c);
+  }
   let highlightsKey = "";
   let saveHlTimer = null;
   // Refreshed by the 2 s render loop so the per-message hot path needs no DOM access.
@@ -1164,11 +1231,12 @@
   }
 
   function feedHighlights(m) {
-    // Hot path (runs per message) — no DOM here (`densityArmed` is refreshed by the 2 s loop).
-    // Density is keyed by WALL-CLOCK time, not seekable.end (which YouTube often freezes); the
-    // render maps "how long ago" onto the seekbar so the wave scrolls left as the stream runs.
-    if (m.self || !densityArmed || !atLiveCached) return; // pause recording when replaying behind live
-    density.add(Date.now() / 1000, 1);
+    // Hot path (runs per message) — no DOM here (`densityArmed`/`liveEdgeVt` refreshed by the 2 s
+    // loop). Density is keyed by the seekbar's STREAM-TIME (the same coordinate the emote markers
+    // use) so the wave and the emotes scroll/scale in exact lockstep and never drift apart. We
+    // extrapolate the live edge forward from the last sample by wall-clock elapsed.
+    if (m.self || !densityArmed || !atLiveCached || liveEdgeVt <= 0) return; // pause when replaying behind live
+    density.add(liveEdgeVt + (Date.now() - liveEdgeAt) / 1000, 1);
     if (!prefs.highlightEnabled) return;
     const user = (m.user || "").toLowerCase();
     const seen = new Set();
@@ -1253,11 +1321,12 @@
     grad.setAttribute("x1", "0"); grad.setAttribute("y1", "0");
     grad.setAttribute("x2", "0"); grad.setAttribute("y2", "1");
     // Non-linear: opaque only near the crest (top), falling off fast so the body stays faint —
-    // taller peaks read as brighter, low activity stays subtle. Bumped overall for more presence.
+    // taller peaks read as brighter, low activity stays subtle. Color is the user's wave color.
+    const wc = waveColor();
     for (const [off, op] of [[0, 1], [18, 0.72], [45, 0.42], [100, 0.16]]) {
       const st = document.createElementNS(SVGNS, "stop");
       st.setAttribute("offset", off + "%");
-      st.setAttribute("stop-color", "#ffffff");
+      st.setAttribute("stop-color", wc);
       st.setAttribute("stop-opacity", String(op));
       grad.appendChild(st);
     }
@@ -1269,6 +1338,7 @@
     const topline = document.createElementNS(SVGNS, "path");
     topline.setAttribute("class", "meridian-wave-topline");
     topline.setAttribute("fill", "none");
+    topline.setAttribute("stroke", wc);
     svg.append(defs, path, topline);
     const emotes = document.createElement("div");
     emotes.className = "meridian-wave-emotes";
@@ -1283,25 +1353,25 @@
     if (SITE.waveSpanSec) return SITE.waveSpanSec;
     return Math.max(10, s.end - s.start);
   }
-  // Wall-clock window the wave covers. Activity recorded at wall-time t reacted to a video moment
-  // ~offset seconds earlier, so to place each bucket under the moment it reacted to we map the bar
-  // live edge (frac 1) to wall-time `now + offset` — sliding the whole wave left by the offset and
-  // keeping it aligned with the emote markers (which subtract the same offset in video-time).
-  function waveClockWindow(s, nowMs) {
-    const span = waveWindow(s);
-    const end = nowMs / 1000 + highlightOffset();
-    return { start: end - span, end, span };
+  // Stream-time window for the wave. Density is keyed by the seekbar's stream-time (same as emote
+  // markers). Activity recorded at live edge `st` reacted to video moment `st − offset`, so querying
+  // [s.start+off, s.end+off] and plotting each bucket at `(t − off)` exactly fills the visible bar
+  // [s.start, s.end] — sliding the whole wave left by the reaction offset, in lockstep with the
+  // emote markers (which subtract the same offset). One coordinate space → no drift between layers.
+  function streamWindow(s) {
+    const off = highlightOffset();
+    return { start: s.start + off, end: s.end + off, span: Math.max(10, s.end - s.start), off };
   }
 
   function recomputeResIfDue(now, s) {
-    if (lastResAt && now - lastResAt < 120000) return; // every 2 min
+    if (lastResAt && now - lastResAt < 30000) return; // every 30 s — fine, gradual resolution steps
     lastResAt = now;
     densityRes = density.resolutionFor(waveWindow(s));
   }
   function recomputePeakIfDue(now, s) {
     if (lastPeakAt && now - lastPeakAt < 20000) return; // every 20 s
     lastPeakAt = now;
-    const w = waveClockWindow(s, now);
+    const w = streamWindow(s);
     let mx = 0;
     for (const p of density.series(w.start, w.end, densityRes)) if (p.v > mx) mx = p.v;
     densityPeak = mx || 1;
@@ -1310,10 +1380,9 @@
   function renderWave() {
     const s = videoSeekable();
     if (!waveLayer || !s) return;
-    const w = waveClockWindow(s, Date.now());
-    const span = w.span;
+    const w = streamWindow(s);
     const series = density.series(w.start, w.end, densityRes);
-    lastSeries = series; lastSpan = span; lastNowSec = w.end;
+    lastSeries = series; lastSpan = w.span; lastStart = s.start; lastOff = w.off;
     const path = waveLayer.querySelector(".meridian-wave-path");
     const topline = waveLayer.querySelector(".meridian-wave-topline");
     const svg = waveLayer.querySelector("svg");
@@ -1341,8 +1410,8 @@
   function waveHeightAtFrac(frac) {
     if (!lastSeries || lastSeries.length < 2 || lastSpan <= 0) return 0.4;
     const step = Math.max(density.baseRes, densityRes);
-    const t = (lastNowSec - lastSpan) + frac * lastSpan; // wall-clock time at this fraction
-    const idx = Math.round((t - lastSeries[0].t) / step);
+    const st = lastStart + frac * lastSpan + lastOff; // stream-time bucket at this plotted fraction
+    const idx = Math.round((st - lastSeries[0].t) / step);
     const p = lastSeries[Math.max(0, Math.min(lastSeries.length - 1, idx))];
     return Math.min(1, (p?.v || 0) / (densityPeak || 1));
   }
@@ -1464,10 +1533,11 @@
     const s = videoSeekable();
     if (!s) { markWaveOnPlayer(false); return; }
     atLiveCached = atLiveEdge(s); // gates the per-message recording hot path
+    liveEdgeVt = s.end; liveEdgeAt = Date.now(); // sample the seekbar live edge for the hot path
     if (hlStorageKey() !== highlightsKey) loadHighlights();
     const now = Date.now();
-    // Keep density bounded: drop buckets older than the window we could ever render.
-    density.pruneBefore(now / 1000 - Math.max(waveWindow(s), 600) - highlightOffset());
+    // Keep density bounded: drop buckets older than the stream-time window we could ever render.
+    density.pruneBefore(s.end - Math.max(waveWindow(s), 600) - highlightOffset());
     recomputeResIfDue(now, s);
     recomputePeakIfDue(now, s);
     // No seekbar right now (e.g. Kick controls hidden) → render nothing, so the wave + emotes
@@ -1841,10 +1911,33 @@
   // from feedback loops: we only toggle inline position/padding, never these attributes.
   function observeDockLayout(anchor) {
     if (dockLayoutObs) dockLayoutObs.disconnect();
-    dockLayoutObs = new MutationObserver(() => { if (root.classList.contains("meridian-docked")) sizeDockAnchor(); });
+    dockLayoutObs = new MutationObserver(() => { if (root.classList.contains("meridian-docked")) scheduleSizeDock(); });
     const wf = document.querySelector("ytd-watch-flexy");
     if (wf) dockLayoutObs.observe(wf, { attributes: true, attributeFilter: ["theater", "full-bleed-player", "fullscreen"] });
     dockLayoutObs.observe(anchor, { attributes: true, attributeFilter: ["collapsed", "hide-chat-frame"] });
+  }
+  // Trailing-debounced sizing. On load YouTube flaps the theater / collapsed attributes for a few
+  // seconds before settling; reacting to every flap re-ran the theater reservation (padding +
+  // position:fixed + a player resize nudge) on and off, which forced YouTube to relayout the
+  // player+chat wrapper repeatedly → the thin line flickering at its top for ~10 s. Debouncing
+  // coalesces the burst so we only size against the SETTLED state (and never react to a transient
+  // "collapsed" while the chat frame is still loading).
+  function scheduleSizeDock() {
+    if (sizeDebTimer) clearTimeout(sizeDebTimer);
+    sizeDebTimer = setTimeout(() => { sizeDebTimer = null; sizeDockAnchor(); }, 200);
+  }
+  // While the theater-with-chat-hidden chat is pinned position:fixed, the YouTube player scrolls
+  // with the page but our fixed panel doesn't — so it drifts until the 2 s poll re-pins it. Re-pin
+  // on scroll (rAF-throttled) so it tracks the player immediately.
+  function repinTheaterChat() {
+    const a = dockAnchor;
+    if (!a || !dockForcedFixed) return;
+    const fb = document.querySelector("#full-bleed-container");
+    if (!fb) return;
+    const fr = fb.getBoundingClientRect();
+    a.style.top = fr.top + "px";
+    a.style.left = (fr.left + fr.width - THEATER_CHAT_W) + "px";
+    a.style.height = fr.height + "px";
   }
   function theaterFullBleedContainer() {
     const wf = document.querySelector("ytd-watch-flexy");
@@ -1892,8 +1985,18 @@
       if (dockAnchorPosSet) a.style.position = "relative";
       dockForcedFixed = false;
     }
-    const ph = SITE.findPlayer?.()?.offsetHeight || 0;
-    if (ph > 0) a.style.minHeight = ph + "px";
+    // Only pin a min-height when native chat is HIDDEN — then the frame would collapse and take our
+    // absolutely-positioned panel down with it, so we hold it at the player height. When native chat
+    // is VISIBLE (the docked-in-theater case the user saw flicker), YouTube already sizes the frame;
+    // re-writing min-height on every 2 s poll while the player height settled on load kept reflowing
+    // the rounded container and flickered its top outline for ~10 s. So leave it alone when visible
+    // (and clear any pin we'd set), and keep the write idempotent when hidden.
+    if (collapsed) {
+      const ph = SITE.findPlayer?.()?.offsetHeight || 0;
+      if (ph > 0) { const v = ph + "px"; if (a.style.minHeight !== v) a.style.minHeight = v; }
+    } else if (a.style.minHeight) {
+      a.style.removeProperty("min-height");
+    }
   }
   function undock() {
     if (dockRetryTimer) { clearTimeout(dockRetryTimer); dockRetryTimer = null; }

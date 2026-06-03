@@ -1,38 +1,70 @@
-# Meridian — Twitch Chat Overlay for YouTube
+# Meridian — Twitch Chat Overlay for YouTube & Kick
 
-A Chrome MV3 extension that puts a draggable, transparent Twitch chat overlay on top of YouTube videos. Useful for watching tournament re-broadcasts, esports VODs, or any YouTube channel that has a corresponding Twitch chat you'd rather follow live than read after the fact.
+A Chrome extension that overlays a live **Twitch chat** on top of **YouTube** and **Kick** video pages. Built for watching tournament re-broadcasts, esports streams, and co-streams where the conversation you actually want is happening in a Twitch channel.
 
-## Features
+It runs entirely in your browser — no backend, no tracking, no account required to read.
 
-- Transparent, draggable, resizable chat overlay anchored to the YouTube player (or fixed on the page).
-- Auto-detects the video's channel handle and joins the mapped Twitch channel.
-- Live Twitch IRC: badges, native emotes, plus 7TV / BetterTTV / FrankerFaceZ emotes (global + channel sets).
-- Chat input with emote autocomplete, optional client-side delay, blocklist, hide-deleted-messages.
-- Auth uses your existing twitch.tv login cookie — no app registration, no OAuth flow. Anonymous read-only mode if you're not logged in.
-- Configurable hotkeys for toggling the overlay and focusing the chat input.
-- Appearance: opacity, blur, blur radius, drop shadow, font size.
+> Developers: see [DEVELOPMENT.md](./DEVELOPMENT.md) for install, Twitch setup, and debugging.
 
-## Install (unpacked, for development)
-
-1. Clone this repo.
-2. Open `chrome://extensions`, enable **Developer mode**.
-3. Click **Load unpacked** and select this directory.
-4. Log into `twitch.tv` in the same browser profile to chat as your account; otherwise the overlay is read-only.
-
-The `setup.sh` script launches a separate Chrome profile with the extension preloaded for testing.
+---
 
 ## Permissions
 
 | Permission | Why |
 | --- | --- |
-| `storage` | Save your preferences and a 24h emote cache. |
-| `cookies` (twitch.tv only) | Read the existing `auth-token` cookie so you can chat as your Twitch account without re-logging in. |
-| Host: `youtube.com` | Inject the overlay on watch pages. |
-| Host: `*.twitch.tv`, `id.twitch.tv`, `api.twitch.tv` | Validate the token, fetch your display name, connect to chat. |
+| `storage` | Save your preferences and a 24 h emote cache. |
+| `identity` | Run Twitch's official OAuth flow when you click **Connect Twitch** (no cookies read). |
+| `activeTab` | Let the popup read the current tab's host to show per-site settings. |
+| Host: `youtube.com`, `kick.com` | Inject the overlay on watch / channel pages. |
+| Host: `*.twitch.tv`, `id.twitch.tv`, `api.twitch.tv` | Validate the OAuth token, fetch your display name, connect to chat. |
 | Host: `7tv.io`, `betterttv.net`, `frankerfacez.com` | Fetch public emote sets. |
 
-See [PRIVACY.md](./PRIVACY.md) for the full data handling policy.
+See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
+
+---
+
+## Features
+
+### Overlay & display
+- **Transparent, draggable, resizable** chat panel that you can place anywhere.
+- **Three display modes, saved per site:**
+  - **Overlay** — floating panel over the video.
+  - **Docked** — an opaque panel embedded inside the site's native chat frame, with a **`[Site | Twitch]` tab switcher** so you can flip between the site's chat and Twitch chat. Survives theater and fullscreen.
+  - **Auto** — overlay in fullscreen, docked otherwise.
+
+### Chat
+- **Live Twitch IRC**: badges, colors, `/me` actions, and case-correct display names.
+- **Native Twitch emotes** plus **7TV / BetterTTV / FrankerFaceZ** (global **and** channel sets, each provider toggleable).
+- **Emote & @-mention autocomplete** — prefix matching, Tab/Enter to complete; typed emotes become inline image chips.
+- **Chat delay** (0–600 s) to sync chat with a delayed stream.
+- **Render batching** to keep very fast channels smooth.
+- **Blocklist** (hide messages by word) and **hide-deleted-messages** (remove moderated lines instead of dimming them).
+- **Send messages** once you connect your Twitch account.
+
+### Timeline highlights (YouTube livestreams)
+- **Chat-activity wave** — a YouTube "most-replayed"-style density wave drawn over the live seekbar, scaled to chat messages-per-second. Resolution adapts to stream length.
+- **Emote surge markers** — when enough unique viewers spam one emote in a short window, the emote is perched on the wave at that moment. **Click to seek** straight to it.
+- The wave and markers share the seekbar's stream-time, so they stay in **exact sync** and remain accurate as the stream grows. Per-stream persistence with one-click cache clearing.
+
+### Channels
+- **Auto-detects** the YouTube channel handle / Kick slug and joins the mapped Twitch channel.
+- **Channel mappings editor** (`handle = twitch_channel`), seeded with common esports channels (ESL, PGL, BLAST, StarLadder, Valorant, etc.).
+- **Per-page override** — type any Twitch channel directly in the overlay header.
+
+### Account & privacy
+- **Anonymous read-only by default** — no login needed to watch chat.
+- **Connect Twitch** through the official OAuth flow to send messages. **No cookies are ever read.** The token is stored locally and removable with one click.
+
+### Appearance
+- Background color, background blur (+ radius), panel drop shadow, panel outline.
+- Text legibility: none / drop-shadow / outline, plus a bold-text toggle.
+- Opacity and font-size controls.
+
+### Hotkeys
+- **Toggle visibility** and **focus input**, both configurable.
+
+---
 
 ## License
 
-MIT — do whatever you like with it.
+MIT License.
