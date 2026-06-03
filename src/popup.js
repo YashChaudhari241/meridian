@@ -32,7 +32,11 @@ async function refreshStatus() {
 
 $("#mode").addEventListener("change", async (e) => { await send("MODE_SET", { mode: e.target.value }); refreshStatus(); });
 
-$("#showBubble").addEventListener("change", async (e) => { await setPrefs({ bubbleHidden: !e.target.checked }); });
+$("#extensionEnabled").addEventListener("change", async (e) => {
+  await setPrefs({ extensionEnabled: e.target.checked });
+  // Off ⇄ on mounts/unmounts the content script — reload the active tab to apply.
+  if (activeTab?.id) chrome.tabs.reload(activeTab.id);
+});
 
 // ---------- prefs load/save ----------
 const defaults = {
@@ -40,13 +44,16 @@ const defaults = {
   chatDelaySec: 0, updateFrequencyMs: 0, autoscroll: true,
   hotkeyHide: "", hotkeyOverlay: "", hotkeyDocked: "",
   opacity: 0.55, fontSize: 13, blurRadius: 6, maxMessages: 300,
-  blurEnabled: true, bgEnabled: true, shadowEnabled: true,
+  blurEnabled: true, bgEnabled: true, shadowEnabled: true, outlineEnabled: true,
   boundToPlayer: true,
   blockedWords: [], hideDeleted: false,
-  hidden: false, bubbleHidden: false,
+  hidden: false, extensionEnabled: true,
   sites: {},
   highlightTimeline: false, highlightEnabled: false, highlightThreshold: 3, highlightAnchorLive: true,
-  emote7tv: true, emoteBttv: true, emoteFfz: true
+  highlightOffsetSec: 5,
+  emote7tv: true, emoteBttv: true, emoteFfz: true,
+  textStyle: "none", boldText: false,
+  ytLoadOn: "live"
 };
 
 async function getPrefs() {
@@ -90,20 +97,25 @@ async function loadAllFields() {
   $("#blurEnabled").checked = p.blurEnabled !== false;
   $("#bgEnabled").checked = p.bgEnabled !== false;
   $("#shadowEnabled").checked = p.shadowEnabled !== false;
+  $("#outlineEnabled").checked = p.outlineEnabled !== false;
   $("#hotkeyHide").value = p.hotkeyHide || "";
   $("#hotkeyOverlay").value = p.hotkeyOverlay || "";
   $("#hotkeyDocked").value = p.hotkeyDocked || "";
   $("#boundToPlayer").checked = p.boundToPlayer !== false;
+  $("#ytLoadOn").value = p.ytLoadOn === "all" ? "all" : "live";
   $("#hideDeleted").checked = p.hideDeleted === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
-  $("#showBubble").checked = p.bubbleHidden !== true;
+  $("#extensionEnabled").checked = p.extensionEnabled !== false;
   $("#highlightTimeline").checked = p.highlightTimeline === true;
   $("#highlightEnabled").checked = p.highlightEnabled === true;
   $("#highlightAnchorLive").checked = p.highlightAnchorLive !== false;
   $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 3);
+  $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
   $("#emote7tv").checked = p.emote7tv !== false;
   $("#emoteBttv").checked = p.emoteBttv !== false;
   $("#emoteFfz").checked = p.emoteFfz !== false;
+  $("#textStyle").value = p.textStyle || "none";
+  $("#boldText").checked = p.boldText === true;
   syncHighlightGating(p.highlightTimeline === true);
 }
 // Emote highlights only make sense when the wave is on (spec: "emote timeline can only be
@@ -132,17 +144,19 @@ async function detectActiveTab() {
   hostSupported = activeHost ? isSupportedHost(activeHost) : false;
 }
 
-// Effective per-site mode: "off" | "overlay" | "docked" | "hidden".
+// The site's chosen *visible* mode: "auto" | "overlay" | "docked". (Hiding is a transient flag
+// toggled by the chat bubble, not a dropdown option, so the dropdown shows the mode chat returns to.)
 function siteModeValue(p) {
-  const e = p.sites?.[activeHost];
-  if (e && e.enabled === false) return "off";
-  if (e && (e.mode === "overlay" || e.mode === "docked" || e.mode === "hidden")) return e.mode;
-  return p.hidden ? "hidden" : "overlay";
+  const m = p.sites?.[activeHost]?.mode;
+  return (m === "overlay" || m === "docked" || m === "auto") ? m : "auto";
 }
 
 async function initSiteCard() {
   const card = $("#siteCard");
   const sel = $("#siteMode");
+  // The "Load chat on" (live-only) gate is YouTube-specific — hide it elsewhere.
+  const isYouTube = activeHost ? /(^|\.)youtube\.com$/.test(activeHost) : false;
+  $("#ytLoadOnCard").style.display = isYouTube ? "" : "none";
   if (!activeHost || !/^https?:/.test(activeTab?.url || "")) {
     card.style.display = "none"; sel.disabled = true; return;
   }
@@ -161,20 +175,18 @@ async function initSiteCard() {
 
 $("#siteMode").addEventListener("change", async (e) => {
   if (!activeHost || !hostSupported) return;
-  const v = e.target.value;
+  const v = e.target.value; // auto | overlay | docked
   const cur = await getPrefs();
-  const wasOff = cur.sites?.[activeHost]?.enabled === false;
   const sites = { ...(cur.sites || {}) };
-  sites[activeHost] = v === "off"
-    ? { ...(sites[activeHost] || {}), enabled: false }
-    : { ...(sites[activeHost] || {}), enabled: true, mode: v };
+  // Choosing a visible mode also un-hides chat (the dropdown is the state chat returns to).
+  sites[activeHost] = { ...(sites[activeHost] || {}), mode: v, hidden: false };
   await setPrefs({ sites });
-  // Off ⇄ on needs a reload (mount/unmount); overlay⇄docked⇄hidden apply live.
-  if ((v === "off" || wasOff) && activeTab?.id) chrome.tabs.reload(activeTab.id);
+  // Mode changes apply live in the content script — no reload needed.
 });
 
 // ---------- YouTube / player binding ----------
 $("#boundToPlayer").addEventListener("change", async (e) => { await setPrefs({ boundToPlayer: e.target.checked }); });
+$("#ytLoadOn").addEventListener("change", async (e) => { await setPrefs({ ytLoadOn: e.target.value }); });
 $("#saveMappings").addEventListener("click", async () => {
   const { mappings, errors } = parseMappings($("#mappings").value);
   await setPrefs({ mappings });
@@ -225,6 +237,12 @@ $("#saveHighlightThreshold").addEventListener("click", async () => {
   $("#highlightThreshold").value = v;
   flash($("#saveHighlightThreshold"));
 });
+$("#saveHighlightOffset").addEventListener("click", async () => {
+  const v = Math.max(0, Math.min(120, parseInt($("#highlightOffset").value, 10) || 0));
+  await setPrefs({ highlightOffsetSec: v });
+  $("#highlightOffset").value = v;
+  flash($("#saveHighlightOffset"));
+});
 $("#emote7tv").addEventListener("change", async (e) => { await setPrefs({ emote7tv: e.target.checked }); });
 $("#emoteBttv").addEventListener("change", async (e) => { await setPrefs({ emoteBttv: e.target.checked }); });
 $("#emoteFfz").addEventListener("change", async (e) => { await setPrefs({ emoteFfz: e.target.checked }); });
@@ -263,6 +281,9 @@ $("#blurRadius").addEventListener("input", async (e) => {
 });
 $("#bgEnabled").addEventListener("change", async (e) => { await setPrefs({ bgEnabled: e.target.checked }); });
 $("#shadowEnabled").addEventListener("change", async (e) => { await setPrefs({ shadowEnabled: e.target.checked }); });
+$("#outlineEnabled").addEventListener("change", async (e) => { await setPrefs({ outlineEnabled: e.target.checked }); });
+$("#textStyle").addEventListener("change", async (e) => { await setPrefs({ textStyle: e.target.value }); });
+$("#boldText").addEventListener("change", async (e) => { await setPrefs({ boldText: e.target.checked }); });
 $("#saveFontSize").addEventListener("click", async () => {
   const v = Math.max(10, Math.min(24, parseInt($("#fontSize").value, 10) || 13));
   await setPrefs({ fontSize: v });

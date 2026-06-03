@@ -22,18 +22,20 @@
   <section class="panel" data-tab="general">
     <div id="status" class="card"></div>
     <div class="card">
+      <label class="row" style="gap:8px;">
+        <input id="extensionEnabled" type="checkbox" />
+        <span>Extension enabled</span>
+      </label>
+      <div class="hint">Master switch — turns Meridian off everywhere.</div>
+    </div>
+    <div class="card">
       <label>Display mode (this site)</label>
       <select id="siteMode">
-        <option value="off">Off</option>
+        <option value="auto">Auto (overlay in fullscreen, docked otherwise)</option>
         <option value="overlay">Overlay (floating)</option>
         <option value="docked">Docked (in the page)</option>
-        <option value="hidden">Hidden (bubble only)</option>
       </select>
-      <label class="row" style="gap:8px; margin-top:8px;">
-        <input id="showBubble" type="checkbox" />
-        <span>Show floating toggle bubble</span>
-      </label>
-      <div class="hint" id="siteModeHint">Saved per site. Off unmounts entirely; Hidden keeps it behind the bubble.</div>
+      <div class="hint" id="siteModeHint">Saved per site. The chat bubble hides chat; clicking it brings chat back to this mode.</div>
     </div>
     <div class="card">
       <label>Auth mode</label>
@@ -51,6 +53,14 @@
     <div class="card" id="siteCard">
       <div id="siteEnabledLabel" style="font-weight:600;"></div>
       <div class="hint" id="siteHint"></div>
+    </div>
+    <div class="card" id="ytLoadOnCard">
+      <label>Load chat on</label>
+      <select id="ytLoadOn">
+        <option value="live">Livestreams only</option>
+        <option value="all">All videos</option>
+      </select>
+      <div class="hint">Livestreams only (default) skips regular videos — the overlay won't load on non-live YouTube videos.</div>
     </div>
     <div class="card">
       <label class="row" style="gap:8px;">
@@ -116,22 +126,32 @@ xqc = xqc"></textarea>
         <input id="highlightEnabled" type="checkbox" />
         <span>Emote highlights (emotes on the wave)</span>
       </label>
-      <label class="row" style="gap:8px; margin-top:8px;">
-        <input id="highlightAnchorLive" type="checkbox" />
-        <span>Anchor highlights to the live edge</span>
-      </label>
-      <div class="hint">On: highlights appear at the live edge (offset by chat delay). Off: at your current playback position. Either way they scroll left as the stream advances.</div>
-      <label style="margin-top:8px;">Threshold (unique viewers / ~12 s)</label>
-      <div class="row">
-        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
-        <button id="saveHighlightThreshold">Save</button>
-      </div>
-      <div class="hint">Unique viewers needed to mark an emote surge (min 5). Click a marker to jump 5 s before it. Requires the highlight timeline.</div>
+      <div class="hint">Click an emote marker to jump exactly to its moment. Requires the highlight timeline.</div>
       <div class="row" style="margin-top:8px;">
         <button id="clearHighlightCache" class="secondary">Clear highlight cache</button>
         <span id="clearHighlightMsg" class="hint"></span>
       </div>
     </div>
+    <details class="card" id="advancedCard">
+      <summary>Advanced</summary>
+      <label class="row" style="gap:8px; margin-top:8px;">
+        <input id="highlightAnchorLive" type="checkbox" />
+        <span>Anchor highlights to the live edge</span>
+      </label>
+      <div class="hint">On: highlights appear at the live edge. Off: at your current playback position. Either way they scroll left, in sync with the seekbar.</div>
+      <label style="margin-top:8px;">Highlight timeline offset (seconds)</label>
+      <div class="row">
+        <input id="highlightOffset" type="number" min="0" max="120" step="1" />
+        <button id="saveHighlightOffset">Save</button>
+      </div>
+      <div class="hint">Shifts the wave + emote markers this many seconds into the past to match human reaction time (default 5). Stays in sync as the timeline scrolls/scales.</div>
+      <label style="margin-top:8px;">Threshold (unique viewers / ~12 s)</label>
+      <div class="row">
+        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
+        <button id="saveHighlightThreshold">Save</button>
+      </div>
+      <div class="hint">Unique viewers needed to mark an emote surge (min 3).</div>
+    </details>
     <div class="card">
       <label class="row" style="gap:8px;">
         <input id="hideDeleted" type="checkbox" />
@@ -161,8 +181,25 @@ word2"></textarea>
       </label>
       <label class="row" style="gap:8px;">
         <input id="shadowEnabled" type="checkbox" />
-        <span>Drop shadow</span>
+        <span>Drop shadow (panel)</span>
       </label>
+      <label class="row" style="gap:8px;">
+        <input id="outlineEnabled" type="checkbox" />
+        <span>Background outline</span>
+      </label>
+    </div>
+    <div class="card">
+      <label>Text style</label>
+      <select id="textStyle">
+        <option value="none">None</option>
+        <option value="shadow">Drop shadow</option>
+        <option value="outline">Outline</option>
+      </select>
+      <label class="row" style="gap:8px; margin-top:8px;">
+        <input id="boldText" type="checkbox" />
+        <span>Bold text (names stay heavier than messages)</span>
+      </label>
+      <div class="hint">Improves legibility over bright video.</div>
     </div>
     <div class="card">
       <label>Background opacity (<span id="opacityVal"></span>)</label>

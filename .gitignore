@@ -1,4 +1,6 @@
 .chrome-profile/
+.debug-profile/
+.debug-profile-brave/
 .DS_Store
 node_modules/
 *.zip
