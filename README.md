@@ -62,8 +62,3 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 ### Hotkeys
 - **Toggle visibility** and **focus input**, both configurable.
 
----
-
-## License
-
-MIT License.
