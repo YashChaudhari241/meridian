@@ -2,7 +2,7 @@
 
 A Chrome extension that overlays a live **Twitch chat** on top of **YouTube** and **Kick** video pages. Built for watching tournament re-broadcasts, esports streams, and co-streams where the conversation you actually want is happening in a Twitch channel.
 
-It runs entirely in your browser — no backend, no tracking, no account required to read.
+Runs entirely in your browser — no backend, no tracking, no account required to read.
 
 > Developers: see [DEVELOPMENT.md](./DEVELOPMENT.md) for install, Twitch setup, and debugging.
 
@@ -44,8 +44,7 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 ### Timeline highlights (YouTube livestreams)
 - **Chat-activity wave** — a YouTube "most-replayed"-style density wave drawn over the live seekbar, scaled to chat messages-per-second. Resolution adapts to stream length.
 - **Emote surge markers** — when enough unique viewers spam one emote in a short window, the emote is perched on the wave at that moment. **Click to seek** straight to it.
-- The wave and markers share the seekbar's stream-time, so they stay in **exact sync** and remain accurate as the stream grows. Per-stream persistence with one-click cache clearing.
-
+  
 ### Channels
 - **Auto-detects** the YouTube channel handle / Kick slug and joins the mapped Twitch channel.
 - **Channel mappings editor** (`handle = twitch_channel`), seeded with common esports channels (ESL, PGL, BLAST, StarLadder, Valorant, etc.).
