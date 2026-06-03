@@ -1,0 +1,11 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Meridian">
+  <defs>
+    <linearGradient id="mTile" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B7BFF"></stop>
+      <stop offset="1" stop-color="#7A4EF0"></stop>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#mTile)"></rect>
+  <path d="M 144 322 C 152.5 322.9 163.4 351.6 180 326 C 196.6 300.4 194.6 220.6 214 214 C 233.4 207.4 236.9 313.1 262 298 C 287.1 282.9 297.8 143.4 320 150 C 342.2 156.6 339.4 285.3 356 326 C 372.6 366.7 382.0 322.9 390 322" fill="none" stroke="#FFFFFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"></path>
+  <circle cx="200" cy="156.8" r="21" fill="#FFFFFF"></circle>
+</svg>

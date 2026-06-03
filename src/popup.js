@@ -4,6 +4,12 @@ const PREFS_KEY = "meridian.prefs";
 const UI_KEY = "meridian.ui";
 
 function send(type, extra = {}) { return chrome.runtime.sendMessage({ type, ...extra }); }
+// Paint the accent-filled portion of a range slider (driven by CSS var --pct).
+function setRangeFill(el) {
+  const min = +el.min || 0, max = +el.max || 100;
+  const pct = ((+el.value - min) / (max - min)) * 100;
+  el.style.setProperty("--pct", pct + "%");
+}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -19,13 +25,30 @@ async function activateTab(name, persist = true) {
 $$(".tab").forEach((b) => b.addEventListener("click", () => activateTab(b.dataset.tab)));
 
 // ---------- auth (official Twitch OAuth; anonymous read-only by default) ----------
+// Lucide check glyph for the connection badge.
+const CHECK_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+const EYE_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.94 10.94 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.94 10.94 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg>`;
+
 async function refreshStatus() {
   const s = await send("AUTH_STATUS");
   if (!s?.ok) return;
-  let cls, text;
-  if (s.connected) { cls = "ok"; text = `Connected as ${s.displayName || s.login}`; }
-  else { cls = "warn"; text = "Anonymous read only"; }
-  $("#status").innerHTML = `<div class="status-line ${cls}"><span class="dot"></span>${escapeHtml(text)}</div>`;
+  const chip = $("#headerStatus");
+  if (s.connected) {
+    const who = s.displayName || s.login;
+    $("#status").innerHTML =
+      `<div class="status-line ok"><span class="badge">${CHECK_SVG}</span>` +
+      `<span class="txt"><div class="title">Connected as ${escapeHtml(who)}</div>` +
+      `<div class="meta">Read-only chat works without connecting.</div></span></div>`;
+    chip.className = "ok";
+    $("#headerStatusText").textContent = who;
+  } else {
+    $("#status").innerHTML =
+      `<div class="status-line warn"><span class="badge">${EYE_SVG}</span>` +
+      `<span class="txt"><div class="title">Anonymous read-only</div>` +
+      `<div class="meta">Connect Twitch to send messages.</div></span></div>`;
+    chip.className = "warn";
+    $("#headerStatusText").textContent = "Anonymous";
+  }
   $("#connectTwitch").style.display = s.connected ? "none" : "";
   $("#disconnectTwitch").style.display = s.connected ? "" : "none";
   // Functional setup helper (not a setting description): how to enable connecting.
@@ -111,11 +134,14 @@ async function loadAllFields() {
   $("#delay").value = p.chatDelaySec ?? 0;
   $("#updateFreq").value = p.updateFrequencyMs ?? 0;
   $("#maxMessages").value = p.maxMessages ?? 300;
-  $("#opacity").value = Math.round((p.opacity ?? 0.51) * 100);
-  $("#opacityVal").textContent = `${Math.round((p.opacity ?? 0.51) * 100)}%`;
+  const opPct = Math.round((p.opacity ?? 0.51) * 100);
+  $("#opacity").value = opPct;
+  $("#opacityVal").textContent = `${opPct}%`;
+  setRangeFill($("#opacity"));
   $("#fontSize").value = p.fontSize ?? 13;
   $("#blurRadius").value = p.blurRadius ?? 0;
   $("#blurRadiusVal").textContent = `${p.blurRadius ?? 0}px`;
+  setRangeFill($("#blurRadius"));
   $("#blurEnabled").checked = p.blurEnabled === true;
   $("#bgEnabled").checked = p.bgEnabled !== false;
   $("#shadowEnabled").checked = p.shadowEnabled === true;
@@ -133,6 +159,7 @@ async function loadAllFields() {
   $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 5);
   $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
   $("#highlightColor").value = p.highlightColor || "#b388ff";
+  $("#highlightColorAppearance").value = p.highlightColor || "#b388ff";
   $("#emote7tv").checked = p.emote7tv !== false;
   $("#emoteBttv").checked = p.emoteBttv !== false;
   $("#emoteFfz").checked = p.emoteFfz !== false;
@@ -243,7 +270,14 @@ $("#highlightTimeline").addEventListener("change", async (e) => {
 });
 $("#highlightEnabled").addEventListener("change", async (e) => { await setPrefs({ highlightEnabled: e.target.checked }); });
 $("#highlightAnchorLive").addEventListener("change", async (e) => { await setPrefs({ highlightAnchorLive: e.target.checked }); });
-$("#highlightColor").addEventListener("input", async (e) => { await setPrefs({ highlightColor: e.target.value }); });
+$("#highlightColor").addEventListener("input", async (e) => {
+  $("#highlightColorAppearance").value = e.target.value;
+  await setPrefs({ highlightColor: e.target.value });
+});
+$("#highlightColorAppearance").addEventListener("input", async (e) => {
+  $("#highlightColor").value = e.target.value;
+  await setPrefs({ highlightColor: e.target.value });
+});
 $("#saveHighlightThreshold").addEventListener("click", async () => {
   const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 5));
   await setPrefs({ highlightThreshold: v });
@@ -283,12 +317,14 @@ $("#saveBlockedWords").addEventListener("click", async () => {
 $("#opacity").addEventListener("input", async (e) => {
   const pct = parseInt(e.target.value, 10);
   $("#opacityVal").textContent = `${pct}%`;
+  setRangeFill(e.target);
   await setPrefs({ opacity: pct / 100 });
 });
 $("#blurEnabled").addEventListener("change", async (e) => { await setPrefs({ blurEnabled: e.target.checked }); });
 $("#blurRadius").addEventListener("input", async (e) => {
   const v = parseInt(e.target.value, 10);
   $("#blurRadiusVal").textContent = `${v}px`;
+  setRangeFill(e.target);
   await setPrefs({ blurRadius: v });
 });
 $("#bgEnabled").addEventListener("change", async (e) => { await setPrefs({ bgEnabled: e.target.checked }); });
