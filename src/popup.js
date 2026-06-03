@@ -18,35 +18,65 @@ async function activateTab(name, persist = true) {
 }
 $$(".tab").forEach((b) => b.addEventListener("click", () => activateTab(b.dataset.tab)));
 
-// ---------- auth/status ----------
+// ---------- auth (official Twitch OAuth; anonymous read-only by default) ----------
 async function refreshStatus() {
   const s = await send("AUTH_STATUS");
   if (!s?.ok) return;
-  $("#mode").value = s.mode;
   let cls, text;
-  if (s.mode === "anonymous") { cls = "warn"; text = "Read-only (anonymous)"; }
-  else if (s.cookieAvailable)  { cls = "ok"; text = `Using twitch.tv login: ${s.cookieLogin}`; }
-  else                          { cls = "warn"; text = "Read-only — log into twitch.tv to chat"; }
+  if (s.connected) { cls = "ok"; text = `Connected as ${s.displayName || s.login}`; }
+  else { cls = "warn"; text = "Anonymous read only"; }
   $("#status").innerHTML = `<div class="status-line ${cls}"><span class="dot"></span>${escapeHtml(text)}</div>`;
+  $("#connectTwitch").style.display = s.connected ? "none" : "";
+  $("#disconnectTwitch").style.display = s.connected ? "" : "none";
+  // Functional setup helper (not a setting description): how to enable connecting.
+  if (!s.clientIdSet) {
+    $("#authMsg").textContent = "Add TWITCH_CLIENT_ID in src/config.js to enable connecting.";
+    $("#redirectHelp").textContent = `OAuth Redirect URL: ${s.redirectUri}`;
+  } else {
+    if ($("#authMsg").textContent.startsWith("Add TWITCH_CLIENT_ID")) $("#authMsg").textContent = "";
+    $("#redirectHelp").textContent = "";
+  }
 }
+$("#connectTwitch").addEventListener("click", async () => {
+  $("#authMsg").textContent = "Opening Twitch…";
+  const r = await send("AUTH_CONNECT");
+  $("#authMsg").textContent = r?.ok ? "Connected ✓" : (r?.error || "Connect failed");
+  refreshStatus();
+});
+$("#disconnectTwitch").addEventListener("click", async () => {
+  await send("AUTH_DISCONNECT");
+  $("#authMsg").textContent = "";
+  refreshStatus();
+});
 
-$("#mode").addEventListener("change", async (e) => { await send("MODE_SET", { mode: e.target.value }); refreshStatus(); });
-
-$("#showBubble").addEventListener("change", async (e) => { await setPrefs({ bubbleHidden: !e.target.checked }); });
+$("#extensionEnabled").addEventListener("change", async (e) => {
+  await setPrefs({ extensionEnabled: e.target.checked });
+  // Off ⇄ on mounts/unmounts the content script — reload the active tab to apply.
+  if (activeTab?.id) chrome.tabs.reload(activeTab.id);
+});
 
 // ---------- prefs load/save ----------
+// Default YouTube handle / Kick slug → Twitch channel mappings (mirrors content.js DEFAULT_MAPPINGS).
+const DEFAULT_MAPPINGS = {
+  eslcs: "eslcs", pgl: "pgl", blastpremier: "blastpremier",
+  starladder_cs: "starladder_cs_en", starladder: "starladder_cs_en",
+  valorantesports: "valorant", tenz: "tenz", ohnepixel: "ohnepixel"
+};
 const defaults = {
-  channel: "", mappings: {}, overrideChannel: "",
+  channel: "", mappings: { ...DEFAULT_MAPPINGS }, overrideChannel: "",
   chatDelaySec: 0, updateFrequencyMs: 0, autoscroll: true,
-  hotkeyHide: "", hotkeyOverlay: "", hotkeyDocked: "",
-  opacity: 0.55, fontSize: 13, blurRadius: 6, maxMessages: 300,
-  blurEnabled: true, bgEnabled: true, shadowEnabled: true,
+  hotkeyToggle: "", hotkeyFocus: "",
+  opacity: 0.51, fontSize: 13, blurRadius: 0, maxMessages: 300,
+  blurEnabled: false, bgEnabled: true, shadowEnabled: false, outlineEnabled: true,
   boundToPlayer: true,
-  blockedWords: [], hideDeleted: false,
-  hidden: false, bubbleHidden: false,
+  blockedWords: [], hideDeleted: true,
+  hidden: false, extensionEnabled: true,
   sites: {},
-  highlightTimeline: false, highlightEnabled: false, highlightThreshold: 3, highlightAnchorLive: true,
-  emote7tv: true, emoteBttv: true, emoteFfz: true
+  highlightTimeline: true, highlightEnabled: true, highlightThreshold: 5, highlightAnchorLive: true,
+  highlightOffsetSec: 5, highlightColor: "#b388ff",
+  emote7tv: true, emoteBttv: true, emoteFfz: true,
+  textStyle: "shadow", boldText: true,
+  ytLoadOn: "live"
 };
 
 async function getPrefs() {
@@ -80,34 +110,37 @@ async function loadAllFields() {
   $("#mappings").value = mappingsToText(p.mappings || {});
   $("#delay").value = p.chatDelaySec ?? 0;
   $("#updateFreq").value = p.updateFrequencyMs ?? 0;
-  $("#autoscroll").checked = p.autoscroll !== false;
   $("#maxMessages").value = p.maxMessages ?? 300;
-  $("#opacity").value = Math.round((p.opacity ?? 0.55) * 100);
-  $("#opacityVal").textContent = `${Math.round((p.opacity ?? 0.55) * 100)}%`;
+  $("#opacity").value = Math.round((p.opacity ?? 0.51) * 100);
+  $("#opacityVal").textContent = `${Math.round((p.opacity ?? 0.51) * 100)}%`;
   $("#fontSize").value = p.fontSize ?? 13;
-  $("#blurRadius").value = p.blurRadius ?? 6;
-  $("#blurRadiusVal").textContent = `${p.blurRadius ?? 6}px`;
-  $("#blurEnabled").checked = p.blurEnabled !== false;
+  $("#blurRadius").value = p.blurRadius ?? 0;
+  $("#blurRadiusVal").textContent = `${p.blurRadius ?? 0}px`;
+  $("#blurEnabled").checked = p.blurEnabled === true;
   $("#bgEnabled").checked = p.bgEnabled !== false;
-  $("#shadowEnabled").checked = p.shadowEnabled !== false;
-  $("#hotkeyHide").value = p.hotkeyHide || "";
-  $("#hotkeyOverlay").value = p.hotkeyOverlay || "";
-  $("#hotkeyDocked").value = p.hotkeyDocked || "";
+  $("#shadowEnabled").checked = p.shadowEnabled === true;
+  $("#outlineEnabled").checked = p.outlineEnabled !== false;
+  $("#hotkeyToggle").value = p.hotkeyToggle || "";
+  $("#hotkeyFocus").value = p.hotkeyFocus || "";
   $("#boundToPlayer").checked = p.boundToPlayer !== false;
+  $("#ytLoadOn").value = p.ytLoadOn === "all" ? "all" : "live";
   $("#hideDeleted").checked = p.hideDeleted === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
-  $("#showBubble").checked = p.bubbleHidden !== true;
+  $("#extensionEnabled").checked = p.extensionEnabled !== false;
   $("#highlightTimeline").checked = p.highlightTimeline === true;
   $("#highlightEnabled").checked = p.highlightEnabled === true;
   $("#highlightAnchorLive").checked = p.highlightAnchorLive !== false;
-  $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 3);
+  $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 5);
+  $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
+  $("#highlightColor").value = p.highlightColor || "#b388ff";
   $("#emote7tv").checked = p.emote7tv !== false;
   $("#emoteBttv").checked = p.emoteBttv !== false;
   $("#emoteFfz").checked = p.emoteFfz !== false;
+  $("#textStyle").value = p.textStyle || "none";
+  $("#boldText").checked = p.boldText === true;
   syncHighlightGating(p.highlightTimeline === true);
 }
-// Emote highlights only make sense when the wave is on (spec: "emote timeline can only be
-// enabled if highlight timeline is on").
+// Emote highlights only make sense when the wave is on.
 function syncHighlightGating(timelineOn) {
   for (const sel of ["#highlightEnabled", "#highlightAnchorLive"]) {
     const dep = $(sel);
@@ -132,17 +165,16 @@ async function detectActiveTab() {
   hostSupported = activeHost ? isSupportedHost(activeHost) : false;
 }
 
-// Effective per-site mode: "off" | "overlay" | "docked" | "hidden".
 function siteModeValue(p) {
-  const e = p.sites?.[activeHost];
-  if (e && e.enabled === false) return "off";
-  if (e && (e.mode === "overlay" || e.mode === "docked" || e.mode === "hidden")) return e.mode;
-  return p.hidden ? "hidden" : "overlay";
+  const m = p.sites?.[activeHost]?.mode;
+  return (m === "overlay" || m === "docked" || m === "auto") ? m : "auto";
 }
 
 async function initSiteCard() {
   const card = $("#siteCard");
   const sel = $("#siteMode");
+  const isYouTube = activeHost ? /(^|\.)youtube\.com$/.test(activeHost) : false;
+  $("#ytLoadOnCard").style.display = isYouTube ? "" : "none";
   if (!activeHost || !/^https?:/.test(activeTab?.url || "")) {
     card.style.display = "none"; sel.disabled = true; return;
   }
@@ -161,20 +193,16 @@ async function initSiteCard() {
 
 $("#siteMode").addEventListener("change", async (e) => {
   if (!activeHost || !hostSupported) return;
-  const v = e.target.value;
+  const v = e.target.value; // auto | overlay | docked
   const cur = await getPrefs();
-  const wasOff = cur.sites?.[activeHost]?.enabled === false;
   const sites = { ...(cur.sites || {}) };
-  sites[activeHost] = v === "off"
-    ? { ...(sites[activeHost] || {}), enabled: false }
-    : { ...(sites[activeHost] || {}), enabled: true, mode: v };
+  sites[activeHost] = { ...(sites[activeHost] || {}), mode: v, hidden: false };
   await setPrefs({ sites });
-  // Off ⇄ on needs a reload (mount/unmount); overlay⇄docked⇄hidden apply live.
-  if ((v === "off" || wasOff) && activeTab?.id) chrome.tabs.reload(activeTab.id);
 });
 
-// ---------- YouTube / player binding ----------
+// ---------- Site / player binding ----------
 $("#boundToPlayer").addEventListener("change", async (e) => { await setPrefs({ boundToPlayer: e.target.checked }); });
+$("#ytLoadOn").addEventListener("change", async (e) => { await setPrefs({ ytLoadOn: e.target.value }); });
 $("#saveMappings").addEventListener("click", async () => {
   const { mappings, errors } = parseMappings($("#mappings").value);
   await setPrefs({ mappings });
@@ -194,9 +222,6 @@ $("#saveDelay").addEventListener("click", async () => {
   $("#delay").value = v;
   flash($("#saveDelay"));
 });
-$("#autoscroll").addEventListener("change", async (e) => {
-  await setPrefs({ autoscroll: e.target.checked });
-});
 $("#saveUpdateFreq").addEventListener("click", async () => {
   const v = Math.max(0, Math.min(2000, parseInt($("#updateFreq").value, 10) || 0));
   await setPrefs({ updateFrequencyMs: v });
@@ -212,24 +237,29 @@ $("#saveMaxMessages").addEventListener("click", async () => {
 $("#hideDeleted").addEventListener("change", async (e) => { await setPrefs({ hideDeleted: e.target.checked }); });
 $("#highlightTimeline").addEventListener("change", async (e) => {
   const on = e.target.checked;
-  // Turning the wave off also disables the dependent emote highlights.
   await setPrefs(on ? { highlightTimeline: true } : { highlightTimeline: false, highlightEnabled: false });
   if (!on) $("#highlightEnabled").checked = false;
   syncHighlightGating(on);
 });
 $("#highlightEnabled").addEventListener("change", async (e) => { await setPrefs({ highlightEnabled: e.target.checked }); });
 $("#highlightAnchorLive").addEventListener("change", async (e) => { await setPrefs({ highlightAnchorLive: e.target.checked }); });
+$("#highlightColor").addEventListener("input", async (e) => { await setPrefs({ highlightColor: e.target.value }); });
 $("#saveHighlightThreshold").addEventListener("click", async () => {
-  const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 3));
+  const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 5));
   await setPrefs({ highlightThreshold: v });
   $("#highlightThreshold").value = v;
   flash($("#saveHighlightThreshold"));
+});
+$("#saveHighlightOffset").addEventListener("click", async () => {
+  const v = Math.max(0, Math.min(120, parseInt($("#highlightOffset").value, 10) || 0));
+  await setPrefs({ highlightOffsetSec: v });
+  $("#highlightOffset").value = v;
+  flash($("#saveHighlightOffset"));
 });
 $("#emote7tv").addEventListener("change", async (e) => { await setPrefs({ emote7tv: e.target.checked }); });
 $("#emoteBttv").addEventListener("change", async (e) => { await setPrefs({ emoteBttv: e.target.checked }); });
 $("#emoteFfz").addEventListener("change", async (e) => { await setPrefs({ emoteFfz: e.target.checked }); });
 $("#clearHighlightCache").addEventListener("click", async () => {
-  // Remove every persisted highlight set (keys: meridian.highlights.<host>.<id>).
   const all = await chrome.storage.local.get(null);
   const keys = Object.keys(all).filter((k) => k.startsWith("meridian.highlights."));
   if (keys.length) await chrome.storage.local.remove(keys);
@@ -263,6 +293,9 @@ $("#blurRadius").addEventListener("input", async (e) => {
 });
 $("#bgEnabled").addEventListener("change", async (e) => { await setPrefs({ bgEnabled: e.target.checked }); });
 $("#shadowEnabled").addEventListener("change", async (e) => { await setPrefs({ shadowEnabled: e.target.checked }); });
+$("#outlineEnabled").addEventListener("change", async (e) => { await setPrefs({ outlineEnabled: e.target.checked }); });
+$("#textStyle").addEventListener("change", async (e) => { await setPrefs({ textStyle: e.target.value }); });
+$("#boldText").addEventListener("change", async (e) => { await setPrefs({ boldText: e.target.checked }); });
 $("#saveFontSize").addEventListener("click", async () => {
   const v = Math.max(10, Math.min(24, parseInt($("#fontSize").value, 10) || 13));
   await setPrefs({ fontSize: v });
@@ -294,9 +327,8 @@ function bindHotkey(prefKey, inputSel, captureSel, clearSel) {
     await setPrefs({ [prefKey]: "" });
   });
 }
-bindHotkey("hotkeyHide",    "#hotkeyHide",    "#hotkeyHideCapture",    "#hotkeyHideClear");
-bindHotkey("hotkeyOverlay", "#hotkeyOverlay", "#hotkeyOverlayCapture", "#hotkeyOverlayClear");
-bindHotkey("hotkeyDocked",  "#hotkeyDocked",  "#hotkeyDockedCapture",  "#hotkeyDockedClear");
+bindHotkey("hotkeyToggle", "#hotkeyToggle", "#hotkeyToggleCapture", "#hotkeyToggleClear");
+bindHotkey("hotkeyFocus",  "#hotkeyFocus",  "#hotkeyFocusCapture",  "#hotkeyFocusClear");
 function comboFromEvent(e) {
   const parts = [];
   if (e.ctrlKey) parts.push("Ctrl");
@@ -312,18 +344,19 @@ function comboFromEvent(e) {
 
 // ---------- init ----------
 (async () => {
-  await detectActiveTab();
-  const o = await chrome.storage.local.get(UI_KEY);
+  // Populate the config from storage FIRST (fast, local) so the panels fill in immediately.
+  // refreshStatus() messages the background service worker, which may be cold — don't block the
+  // visible settings on that round-trip; let it fill the status card in when it resolves.
+  const [, o] = await Promise.all([detectActiveTab(), chrome.storage.local.get(UI_KEY)]);
   await activateTab(o[UI_KEY]?.tab || "general", false);
-  await refreshStatus();
-  await loadAllFields();
-  await initSiteCard();
+  await Promise.all([loadAllFields(), initSiteCard()]);
+  refreshStatus(); // fire-and-forget — updates the status card asynchronously
 })();
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local" || !changes[PREFS_KEY]) return;
   const a = document.activeElement;
-  if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA") && a.type !== "checkbox") return;
+  if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA") && a.type !== "checkbox" && a.type !== "color") return;
   loadAllFields();
   if (activeHost && hostSupported && a !== $("#siteMode")) {
     $("#siteMode").value = siteModeValue(await getPrefs());

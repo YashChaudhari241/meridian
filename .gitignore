@@ -1,6 +1,11 @@
 .chrome-profile/
+.debug-profile/
+.debug-profile-brave/
 .DS_Store
 node_modules/
 *.zip
 .playwright-mcp/
 .chrome-profile/
+meridian-key.pem
+.pubkey.tmp
+.debug-profile/

@@ -21,28 +21,28 @@
   <!-- General -->
   <section class="panel" data-tab="general">
     <div id="status" class="card"></div>
-    <div class="card">
+    <div class="card" title="Master switch for Meridian across every site">
+      <label class="row" style="gap:8px;">
+        <input id="extensionEnabled" type="checkbox" />
+        <span>Extension enabled</span>
+      </label>
+    </div>
+    <div class="card" title="How chat appears on this site, saved per site. Auto floats in fullscreen and docks otherwise">
       <label>Display mode (this site)</label>
       <select id="siteMode">
-        <option value="off">Off</option>
+        <option value="auto">Auto (overlay in fullscreen, docked otherwise)</option>
         <option value="overlay">Overlay (floating)</option>
         <option value="docked">Docked (in the page)</option>
-        <option value="hidden">Hidden (bubble only)</option>
       </select>
-      <label class="row" style="gap:8px; margin-top:8px;">
-        <input id="showBubble" type="checkbox" />
-        <span>Show floating toggle bubble</span>
-      </label>
-      <div class="hint" id="siteModeHint">Saved per site. Off unmounts entirely; Hidden keeps it behind the bubble.</div>
     </div>
-    <div class="card">
-      <label>Auth mode</label>
-      <select id="mode">
-        <option value="auto">Auto (use twitch.tv login if present)</option>
-        <option value="cookie">Use twitch.tv login only</option>
-        <option value="anonymous">Anonymous read-only</option>
-      </select>
-      <div class="hint">Log into twitch.tv in this browser to send messages; otherwise chat is read-only.</div>
+    <div class="card" title="Connect your Twitch account to send messages. Anonymous read only until connected">
+      <label>Twitch account</label>
+      <div class="row">
+        <button id="connectTwitch">Connect Twitch</button>
+        <button id="disconnectTwitch" class="secondary">Disconnect</button>
+      </div>
+      <div class="hint" id="authMsg"></div>
+      <div class="hint" id="redirectHelp"></div>
     </div>
   </section>
 
@@ -52,54 +52,51 @@
       <div id="siteEnabledLabel" style="font-weight:600;"></div>
       <div class="hint" id="siteHint"></div>
     </div>
-    <div class="card">
+    <div class="card" id="ytLoadOnCard" title="Choose whether the overlay loads on livestreams only or on every YouTube video">
+      <label>Load chat on</label>
+      <select id="ytLoadOn">
+        <option value="live">Livestreams only</option>
+        <option value="all">All videos</option>
+      </select>
+    </div>
+    <div class="card" title="Keep the overlay inside the player, following theater and fullscreen">
       <label class="row" style="gap:8px;">
         <input id="boundToPlayer" type="checkbox" />
         <span>Bind overlay to the video player</span>
       </label>
-      <div class="hint">Keeps the overlay inside the player, following theater and fullscreen.</div>
     </div>
-    <div class="card">
+    <div class="card" title="Map this page's YouTube handle or Kick slug to a Twitch channel, joined automatically">
       <label>Channel → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
-      <textarea id="mappings" rows="8" spellcheck="false" placeholder="@ESLCS = esl
+      <textarea id="mappings" rows="8" spellcheck="false" placeholder="@ESLCS = eslcs
 xqc = xqc"></textarea>
       <button id="saveMappings">Save mappings</button>
       <span id="mappingsMsg" class="hint"></span>
     </div>
-    <div class="hint">Maps the current page's YouTube handle or Kick slug to a Twitch channel, joined automatically.</div>
   </section>
 
   <!-- Chat -->
   <section class="panel" data-tab="chat">
-    <div class="card">
+    <div class="card" title="Delay incoming chat by this many seconds. Zero is realtime">
       <label>Chat delay (seconds)</label>
       <div class="row">
         <input id="delay" type="number" min="0" max="600" step="1" />
         <button id="saveDelay">Save</button>
       </div>
-      <div class="hint">0 = real-time. Also adjustable from the overlay header.</div>
     </div>
-    <div class="card">
-      <label class="row" style="gap:8px;">
-        <input id="autoscroll" type="checkbox" />
-        <span>Autoscroll (pauses 8 s when you scroll)</span>
-      </label>
-    </div>
-    <div class="card">
+    <div class="card" title="Choose which global and channel emote sets to display">
       <label>Third-party emotes</label>
       <label class="row" style="gap:8px;"><input id="emote7tv" type="checkbox" /><span>7TV</span></label>
       <label class="row" style="gap:8px;"><input id="emoteBttv" type="checkbox" /><span>BetterTTV</span></label>
       <label class="row" style="gap:8px;"><input id="emoteFfz" type="checkbox" /><span>FrankerFaceZ</span></label>
-      <div class="hint">Global + channel emote sets to display. Applies to new messages.</div>
     </div>
-    <div class="card">
+    <div class="card" title="Flush new messages in one batch every this many milliseconds. Zero renders instantly">
       <label>Render batching (ms; 0 = instant)</label>
       <div class="row">
         <input id="updateFreq" type="number" min="0" max="2000" step="50" />
         <button id="saveUpdateFreq">Save</button>
       </div>
     </div>
-    <div class="card">
+    <div class="card" title="Maximum messages kept in the chat view">
       <label>Max messages kept in view</label>
       <div class="row">
         <input id="maxMessages" type="number" min="50" max="2000" step="50" />
@@ -107,39 +104,47 @@ xqc = xqc"></textarea>
       </div>
     </div>
     <div class="card">
-      <label class="row" style="gap:8px;">
+      <label class="row" style="gap:8px;" title="Show a chat activity wave over the live seekbar on YouTube livestreams">
         <input id="highlightTimeline" type="checkbox" />
-        <span>Highlight timeline (chat-activity wave on the live seekbar)</span>
+        <span>Highlight timeline (chat-activity wave)</span>
       </label>
-      <div class="hint">A "most-replayed"-style wave of chat activity above the seekbar. Relative height; resolution adapts to length. Live YouTube streams only.</div>
-      <label class="row" style="gap:8px; margin-top:8px;">
+      <label class="row" style="gap:8px; margin-top:8px;" title="Place emote surges on the wave. Click one to jump to that moment">
         <input id="highlightEnabled" type="checkbox" />
         <span>Emote highlights (emotes on the wave)</span>
       </label>
-      <label class="row" style="gap:8px; margin-top:8px;">
-        <input id="highlightAnchorLive" type="checkbox" />
-        <span>Anchor highlights to the live edge</span>
+      <label class="row" style="gap:8px; margin-top:8px;" title="Color of the activity wave and emote markers">
+        <span style="flex:none;">Timeline color</span>
+        <input id="highlightColor" type="color" style="flex:none; width:42px; height:26px; padding:1px;" />
       </label>
-      <div class="hint">On: highlights appear at the live edge (offset by chat delay). Off: at your current playback position. Either way they scroll left as the stream advances.</div>
-      <label style="margin-top:8px;">Threshold (unique viewers / ~12 s)</label>
-      <div class="row">
-        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
-        <button id="saveHighlightThreshold">Save</button>
-      </div>
-      <div class="hint">Unique viewers needed to mark an emote surge (min 5). Click a marker to jump 5 s before it. Requires the highlight timeline.</div>
       <div class="row" style="margin-top:8px;">
         <button id="clearHighlightCache" class="secondary">Clear highlight cache</button>
         <span id="clearHighlightMsg" class="hint"></span>
       </div>
     </div>
-    <div class="card">
+    <details class="card" id="advancedCard">
+      <summary>Advanced</summary>
+      <label class="row" style="gap:8px; margin-top:8px;" title="On keeps highlights at the live edge. Off keeps them at your playback position">
+        <input id="highlightAnchorLive" type="checkbox" />
+        <span>Anchor highlights to the live edge</span>
+      </label>
+      <label style="margin-top:8px;" title="Shift the wave and markers this many seconds into the past for reaction time">Highlight timeline offset (seconds)</label>
+      <div class="row" title="Shift the wave and markers this many seconds into the past for reaction time">
+        <input id="highlightOffset" type="number" min="0" max="120" step="1" />
+        <button id="saveHighlightOffset">Save</button>
+      </div>
+      <label style="margin-top:8px;" title="Unique viewers needed within about twelve seconds to mark an emote surge">Threshold (unique viewers / ~12 s)</label>
+      <div class="row" title="Unique viewers needed within about twelve seconds to mark an emote surge">
+        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
+        <button id="saveHighlightThreshold">Save</button>
+      </div>
+    </details>
+    <div class="card" title="Remove moderated messages instead of dimming them">
       <label class="row" style="gap:8px;">
         <input id="hideDeleted" type="checkbox" />
         <span>Hide deleted messages</span>
       </label>
-      <div class="hint">Remove moderated/timed-out messages instead of dimming them.</div>
     </div>
-    <div class="card">
+    <div class="card" title="Hide messages containing any of these words">
       <label>Blocked words (one per line, case-insensitive)</label>
       <textarea id="blockedWords" rows="6" spellcheck="false" placeholder="word1
 word2"></textarea>
@@ -151,28 +156,44 @@ word2"></textarea>
   <!-- Appearance -->
   <section class="panel" data-tab="appearance">
     <div class="card">
-      <label class="row" style="gap:8px;">
+      <label class="row" style="gap:8px;" title="Show a translucent background behind chat">
         <input id="bgEnabled" type="checkbox" />
         <span>Background color</span>
       </label>
-      <label class="row" style="gap:8px;">
+      <label class="row" style="gap:8px;" title="Blur the video behind the chat background">
         <input id="blurEnabled" type="checkbox" />
         <span>Background blur</span>
       </label>
-      <label class="row" style="gap:8px;">
+      <label class="row" style="gap:8px;" title="Cast a drop shadow under the chat panel">
         <input id="shadowEnabled" type="checkbox" />
-        <span>Drop shadow</span>
+        <span>Drop shadow (panel)</span>
+      </label>
+      <label class="row" style="gap:8px;" title="Draw a thin border around the chat panel">
+        <input id="outlineEnabled" type="checkbox" />
+        <span>Background outline</span>
       </label>
     </div>
     <div class="card">
+      <label title="Add a drop shadow or outline to chat text for legibility over bright video">Text style</label>
+      <select id="textStyle" title="Add a drop shadow or outline to chat text for legibility over bright video">
+        <option value="none">None</option>
+        <option value="shadow">Drop shadow</option>
+        <option value="outline">Outline</option>
+      </select>
+      <label class="row" style="gap:8px; margin-top:8px;">
+        <input id="boldText" type="checkbox" />
+        <span>Bold text</span>
+      </label>
+    </div>
+    <div class="card" title="Opacity of the chat background">
       <label>Background opacity (<span id="opacityVal"></span>)</label>
       <input id="opacity" type="range" min="0" max="100" step="1" />
     </div>
-    <div class="card">
+    <div class="card" title="Strength of the background blur in pixels">
       <label>Background blur radius (<span id="blurRadiusVal"></span>)</label>
       <input id="blurRadius" type="range" min="0" max="20" step="1" />
     </div>
-    <div class="card">
+    <div class="card" title="Chat text size in pixels">
       <label>Font size (px)</label>
       <div class="row">
         <input id="fontSize" type="number" min="10" max="24" step="1" />
@@ -183,30 +204,22 @@ word2"></textarea>
 
   <!-- Hotkeys -->
   <section class="panel" data-tab="hotkeys">
-    <div class="card">
-      <label>Hide chat</label>
+    <div class="card" title="Show or hide chat, the same as the close button and the chat bubble">
+      <label>Toggle visibility</label>
       <div class="row">
-        <input id="hotkeyHide" placeholder="e.g. Alt+H (click then press combo)" readonly />
-        <button id="hotkeyHideCapture">Capture</button>
-        <button id="hotkeyHideClear" class="secondary">Clear</button>
+        <input id="hotkeyToggle" placeholder="e.g. Alt+C (click then press combo)" readonly />
+        <button id="hotkeyToggleCapture">Capture</button>
+        <button id="hotkeyToggleClear" class="secondary">Clear</button>
       </div>
     </div>
-    <div class="card">
-      <label>Show chat — overlay mode</label>
+    <div class="card" title="Show chat and place the cursor in the message box">
+      <label>Focus input</label>
       <div class="row">
-        <input id="hotkeyOverlay" placeholder="e.g. Alt+O (click then press combo)" readonly />
-        <button id="hotkeyOverlayCapture">Capture</button>
-        <button id="hotkeyOverlayClear" class="secondary">Clear</button>
+        <input id="hotkeyFocus" placeholder="e.g. Alt+F (click then press combo)" readonly />
+        <button id="hotkeyFocusCapture">Capture</button>
+        <button id="hotkeyFocusClear" class="secondary">Clear</button>
       </div>
-    </div>
-    <div class="card">
-      <label>Show chat — docked mode</label>
-      <div class="row">
-        <input id="hotkeyDocked" placeholder="e.g. Alt+D (click then press combo)" readonly />
-        <button id="hotkeyDockedCapture">Capture</button>
-        <button id="hotkeyDockedClear" class="secondary">Clear</button>
-      </div>
-      <div class="hint">Requires a modifier (Ctrl/Alt/Shift/Meta). Saved per site.</div>
+      <div class="hint">Requires a modifier such as Ctrl Alt Shift or Meta. Saved globally.</div>
     </div>
   </section>
 

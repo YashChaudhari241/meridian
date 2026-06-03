@@ -54,6 +54,7 @@
 }
 .meridian-root.no-bg .meridian-bg { background: transparent; }
 .meridian-root.no-shadow .meridian-bg { box-shadow: none; }
+.meridian-root.no-outline .meridian-bg { border-color: transparent; }
 
 /* Bars — present at full size at top:0 / bottom:0. Toggled with `visibility`
    so they don't slide, just appear/disappear as the bg expands/contracts. */
@@ -145,6 +146,22 @@
 .meridian-channel-reset:hover { color: #fff; }
 .meridian-channel-reset[hidden] { display: none; }
 
+/* Follow heart (signed-in only) — sits where the reset icon would, opens twitch.tv to follow. */
+.meridian-channel-follow {
+  background: transparent;
+  border: none;
+  color: #c9c9d0;
+  cursor: pointer;
+  padding: 0 3px;
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.meridian-channel-follow svg { fill: none; stroke: currentColor; stroke-width: 2; display: block; }
+.meridian-channel-follow:hover { color: #ff6b81; }
+.meridian-channel-follow[hidden] { display: none; }
+
 .meridian-delay {
   display: flex;
   align-items: center;
@@ -231,6 +248,23 @@
 .meridian-msg.action .meridian-text { font-style: italic; }
 .meridian-msg.action .meridian-sep { display: none; }
 .meridian-name { font-weight: 700; }
+
+/* Text legibility options (Appearance tab). Names stay one step heavier than the message body. */
+.meridian-root.text-shadow .meridian-text,
+.meridian-root.text-shadow .meridian-name,
+.meridian-root.text-shadow .meridian-msg.notice {
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+}
+/* Our own username is a white pill (already has a background), so it needs no shadow. */
+.meridian-root.text-shadow .meridian-msg.self .meridian-name { text-shadow: none; }
+.meridian-root.text-outline .meridian-text,
+.meridian-root.text-outline .meridian-name,
+.meridian-root.text-outline .meridian-msg.notice {
+  -webkit-text-stroke: 0.4px rgba(0, 0, 0, 0.9);
+  paint-order: stroke fill;
+}
+.meridian-root.text-bold .meridian-text { font-weight: 600; }
+.meridian-root.text-bold .meridian-name { font-weight: 800; }
 .meridian-msg.self .meridian-name {
   background: #ffffff;
   color: #15151a;
@@ -438,6 +472,15 @@
   height: calc(100% - 34px) !important;
   box-sizing: border-box !important;
 }
+/* Our docked panel is independent of the site's native chat even though it lives in the same
+   container. When the user hides YouTube chat, YouTube sets display:none on the chat frame (via
+   [collapsed]/[hide-chat-frame]), which would take our absolutely-positioned panel down with it.
+   Override that so the frame stays laid out (sized by the inline min-height we pin to the player
+   height); our opaque panel covers the now-hidden native chat. */
+ytd-live-chat-frame.meridian-dock-anchor[collapsed],
+ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
+  display: flex !important;
+}
 
 .meridian-root.meridian-docked {
   position: absolute;
@@ -497,6 +540,24 @@
 }
 /* `vector-effect` keeps the rounded crest crisp regardless of the non-uniform stretch. */
 .meridian-wave-path { vector-effect: non-scaling-stroke; }
+/* Crisp outline along the top crest of the wave (stroke color set inline from the wave color). */
+.meridian-wave-topline {
+  fill: none;
+  stroke-width: 1.4px;
+  stroke-opacity: 0.92;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* In fullscreen, YouTube draws a channel-logo panel (bottom-left) and a like/dislike quick-actions
+   pill (bottom-right) just above the progress bar — exactly where our wave + perched emotes sit.
+   When our wave is on the player (marked with .meridian-has-wave), lift those overlays clear of it.
+   These overlays only exist in fullscreen, so this never affects normal/theater layout. */
+#movie_player.meridian-has-wave .ytp-overlay-bottom-right,
+#movie_player.meridian-has-wave .ytp-overlay-bottom-left {
+  transform: translateY(-48px);
+}
 
 .meridian-wave-emotes { position: absolute; inset: 0; }
 .meridian-wave-emote {
@@ -514,14 +575,16 @@
   transition: transform 90ms ease;
 }
 .meridian-wave-emote:hover img { transform: scale(1.25); }
+/* Badge perched at the top-right; font kept tiny (≤ YouTube's "HD" quality label) so it's subtle. */
 .meridian-wave-badge {
   position: absolute;
-  top: -5px;
-  right: -7px;
+  top: -4px;
+  right: -5px;
+  left: auto;
   background: #9146ff;
   color: #fff;
-  font: 700 9px/1 "Inter", system-ui, sans-serif;
-  padding: 1px 3px;
+  font: 700 7px/1 "Inter", system-ui, sans-serif;
+  padding: 1px 2.5px;
   border-radius: 999px;
   pointer-events: none;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);

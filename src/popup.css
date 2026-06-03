@@ -45,6 +45,16 @@ body {
   align-items: center;
 }
 .card label { width: 100%; font-size: 11px; opacity: 0.7; }
+/* Collapsible Advanced section reuses the card look but must be block (not flex). */
+details.card { display: block; }
+details.card > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+  list-style: revert;
+}
+details.card[open] > summary { margin-bottom: 6px; }
 .row { display: flex; gap: 6px; align-items: center; width: 100%; }
 
 input[type="text"], input:not([type]), input[type="number"], select {

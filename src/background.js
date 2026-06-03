@@ -1,29 +1,29 @@
-// Twitch auth via the user's existing twitch.tv login cookie, with an anonymous
-// (read-only) fallback. No client id, no OAuth dance.
+// Twitch auth via the official OAuth flow (chrome.identity.launchWebAuthFlow), with an anonymous
+// (read-only) fallback. We never read twitch.tv cookies — that would violate Twitch's Developer
+// Services Agreement. The user explicitly connects their account; the resulting token is stored in
+// chrome.storage.local and used as `oauth:<token>` for IRC.
 //
-// Modes (stored in chrome.storage.local.meridian.authMode, default "auto"):
-//   "auto"      → cookie if available, else anonymous
-//   "cookie"    → cookie or anonymous
-//   "anonymous" → always anonymous
+// Default behavior: anonymous read-only until the user clicks "Connect Twitch" in the popup.
 
-const MODE_KEY = "meridian.authMode";
-const TWITCH_COOKIE_URL = "https://www.twitch.tv";
-const TWITCH_COOKIE_NAME = "auth-token";
+import { TWITCH_CLIENT_ID, TWITCH_SCOPES } from "./config.js";
 
-async function getMode() {
-  const o = await chrome.storage.local.get(MODE_KEY);
-  return o[MODE_KEY] || "auto";
+const AUTH_KEY = "meridian.oauth"; // stored connected-account token + profile
+
+async function getStoredAuth() {
+  const o = await chrome.storage.local.get(AUTH_KEY);
+  return o[AUTH_KEY] || null;
 }
-async function setMode(mode) {
-  await chrome.storage.local.set({ [MODE_KEY]: mode });
-}
+async function setStoredAuth(a) { await chrome.storage.local.set({ [AUTH_KEY]: a }); }
+async function clearStoredAuth() { await chrome.storage.local.remove(AUTH_KEY); }
 
 async function validateToken(token) {
-  const r = await fetch("https://id.twitch.tv/oauth2/validate", {
-    headers: { Authorization: `OAuth ${token}` }
-  });
-  if (!r.ok) return null;
-  return r.json(); // { login, user_id, expires_in, scopes, client_id }
+  try {
+    const r = await fetch("https://id.twitch.tv/oauth2/validate", {
+      headers: { Authorization: `OAuth ${token}` }
+    });
+    if (!r.ok) return null;
+    return r.json(); // { login, user_id, expires_in, scopes, client_id }
+  } catch { return null; }
 }
 
 async function fetchDisplayName(token, clientId, fallbackLogin) {
@@ -37,18 +37,39 @@ async function fetchDisplayName(token, clientId, fallbackLogin) {
   } catch { return fallbackLogin; }
 }
 
-async function getCookieAuth() {
-  let cookie;
-  try {
-    cookie = await chrome.cookies.get({ url: TWITCH_COOKIE_URL, name: TWITCH_COOKIE_NAME });
-  } catch { return null; }
-  if (!cookie?.value) return null;
-  const info = await validateToken(cookie.value);
-  if (!info) return null;
-  const displayName = await fetchDisplayName(cookie.value, info.client_id, info.login);
-  return {
-    kind: "cookie",
-    accessToken: cookie.value,
+function anonymousAuth() {
+  const n = Math.floor(Math.random() * 90000) + 10000;
+  return { kind: "anonymous", accessToken: null, login: `justinfan${n}` };
+}
+
+// Interactive connect: pop the Twitch consent screen and capture the token from the redirect.
+async function connectInteractive() {
+  if (!TWITCH_CLIENT_ID) {
+    throw new Error("Set TWITCH_CLIENT_ID in src/config.js (register an app at dev.twitch.tv).");
+  }
+  const redirectUri = chrome.identity.getRedirectURL();
+  const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const authUrl = "https://id.twitch.tv/oauth2/authorize"
+    + "?response_type=token"
+    + `&client_id=${encodeURIComponent(TWITCH_CLIENT_ID)}`
+    + `&redirect_uri=${encodeURIComponent(redirectUri)}`
+    + `&scope=${encodeURIComponent(TWITCH_SCOPES.join(" "))}`
+    + `&state=${encodeURIComponent(state)}`
+    + "&force_verify=true";
+
+  const redirectResponse = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true });
+  // Token comes back in the URL fragment: #access_token=...&scope=...&state=...
+  const hash = new URL(redirectResponse).hash.replace(/^#/, "");
+  const params = new URLSearchParams(hash);
+  if (params.get("state") !== state) throw new Error("OAuth state mismatch — try again.");
+  const token = params.get("access_token");
+  if (!token) throw new Error(params.get("error_description") || "No access token returned.");
+  const info = await validateToken(token);
+  if (!info) throw new Error("Twitch rejected the token.");
+  const displayName = await fetchDisplayName(token, info.client_id, info.login);
+  const auth = {
+    kind: "oauth",
+    accessToken: token,
     login: info.login,
     displayName,
     userId: info.user_id,
@@ -56,18 +77,18 @@ async function getCookieAuth() {
     clientId: info.client_id,
     expiresAt: Date.now() + (info.expires_in - 60) * 1000
   };
+  await setStoredAuth(auth);
+  return auth;
 }
 
-function anonymousAuth() {
-  const n = Math.floor(Math.random() * 90000) + 10000;
-  return { kind: "anonymous", accessToken: null, login: `justinfan${n}` };
-}
-
+// Resolve the auth used for IRC: the connected account if its token still validates, else anonymous.
 async function resolveAuth() {
-  const mode = await getMode();
-  if (mode === "anonymous") return anonymousAuth();
-  const cookie = await getCookieAuth();
-  if (cookie) return cookie;
+  const stored = await getStoredAuth();
+  if (stored?.accessToken) {
+    const info = await validateToken(stored.accessToken);
+    if (info) return stored;
+    await clearStoredAuth(); // expired / revoked → fall back to read-only
+  }
   return anonymousAuth();
 }
 
@@ -78,21 +99,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "AUTH_GET":
           sendResponse({ ok: true, auth: await resolveAuth() });
           return;
-        case "MODE_GET":
-          sendResponse({ ok: true, mode: await getMode() });
+        case "AUTH_CONNECT": {
+          const auth = await connectInteractive();
+          sendResponse({ ok: true, auth });
           return;
-        case "MODE_SET":
-          await setMode(msg.mode);
+        }
+        case "AUTH_DISCONNECT":
+          await clearStoredAuth();
           sendResponse({ ok: true });
           return;
         case "AUTH_STATUS": {
-          const mode = await getMode();
-          const cookie = await getCookieAuth();
+          const stored = await getStoredAuth();
+          const connected = Boolean(stored?.accessToken);
           sendResponse({
             ok: true,
-            mode,
-            cookieAvailable: Boolean(cookie),
-            cookieLogin: cookie?.login || null
+            connected,
+            login: connected ? stored.login : null,
+            displayName: connected ? (stored.displayName || stored.login) : null,
+            clientIdSet: Boolean(TWITCH_CLIENT_ID),
+            redirectUri: chrome.identity.getRedirectURL()
           });
           return;
         }
@@ -104,10 +129,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
   })();
   return true;
-});
-
-chrome.cookies.onChanged.addListener((info) => {
-  if (info.cookie?.domain?.endsWith("twitch.tv") && info.cookie.name === TWITCH_COOKIE_NAME) {
-    chrome.storage.local.set({ "meridian.cookieRev": Date.now() });
-  }
 });
