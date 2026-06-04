@@ -134,6 +134,7 @@
     // We overlay our panel inside it, so we never restructure YouTube's chat layout.
     findDockAnchor: () => document.querySelector("ytd-live-chat-frame#chat"),
     nativeChatLabel: "YouTube",
+    brandColor: "#FF0033",       // source-badge dot color on the docked tab
     // Timeline highlights (live DVR seekbar). Live detection: the player only renders a
     // `.ytp-live-badge` for live content — `video.duration` is unreliable (finite even live).
     hasTimeline: true,
@@ -202,6 +203,7 @@
     // + the messages/input body). We overlay our panel inside it.
     findDockAnchor: () => document.querySelector("#channel-chatroom"),
     nativeChatLabel: "Kick",
+    brandColor: "#53FC18",       // source-badge dot color on the docked tab
     // Kick live has no usable DVR timeline, so the highlight wave/emotes are unsupported here.
     hasTimeline: false,
     isLive: () => true,
@@ -305,8 +307,10 @@
     <div class="meridian-bg"></div>
     <div class="meridian-header">
       <span class="meridian-channel-field">
-        <span class="meridian-channel-prefix">twitch.tv/</span>
-        <input class="meridian-channel" placeholder="channel name" spellcheck="false" />
+        <span class="meridian-channel-scroll">
+          <span class="meridian-channel-prefix">twitch.tv/</span>
+          <input class="meridian-channel" placeholder="channel name" spellcheck="false" />
+        </span>
         <button class="meridian-channel-reset" data-act="auto" title="Reset to auto channel" hidden>⟲</button>
         <button class="meridian-channel-follow" data-act="follow" title="Follow on Twitch" hidden><svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
       </span>
@@ -484,6 +488,13 @@
   // keydown handled in the document-level capture listener (search "isOurInput").
   els.channel.addEventListener("blur", commitChannelInput);
   els.channel.addEventListener("input", updateResetVisibility);
+  // Rest scrolled to the LEFT (showing `twitch.tv/` + the start of the name) by default and whenever
+  // the field loses focus. While focused/typing the browser keeps the caret in view natively.
+  function scrollChannelToStart() {
+    const f = els.channel.parentElement;
+    if (f) f.scrollLeft = 0;
+  }
+  els.channel.addEventListener("blur", scrollChannelToStart);
 
   function autoChannel() {
     if (detectedHandle && prefs.mappings?.[detectedHandle]) return prefs.mappings[detectedHandle];
@@ -508,6 +519,8 @@
     if (document.activeElement === els.channel) { updateChannelControls(); return; }
     els.channel.value = resolveChannel();
     updateChannelControls();
+    // Default to showing the start (`twitch.tv/<name>…`), not the tail.
+    scrollChannelToStart();
   }
   function isSignedIn() { return currentAuth?.kind === "oauth"; }
   // The heart (signed-in only) takes the reset icon's spot. Reset still works when signed out.
@@ -1436,9 +1449,10 @@
   // is WAVE_GEO.layer tall; the wave SVG occupies the bottom WAVE_GEO.band px). Emote markers
   // never move horizontally (that would lie about the timestamp) — when two surges are too close
   // they bump UP a lane, and a stem + dot ties each one to its exact moment on the wave crest.
-  // lane = bubble-center px from the layer bottom. Lanes are spaced > bubble so stacked markers
-  // don't overlap (legible). The stats tooltip is mounted on the player and positions itself.
-  const WAVE_GEO = { layer: 86, band: 30, bubble: 16, lanes: [40, 58, 76] };
+  // lane = bubble-center px from the layer bottom. Two lanes, generously spaced (well > bubble) so
+  // stacked markers read as clearly separate and the timeline stays uncluttered. The stats tooltip
+  // is mounted on the player and positions itself.
+  const WAVE_GEO = { layer: 86, band: 30, bubble: 16, lanes: [40, 70] };
 
   // Format a stream-time offset (seconds from stream start) as h:mm:ss / m:ss.
   function fmtStreamTime(sec) {
@@ -1565,64 +1579,44 @@
     }
     recs.sort((a, b) => a.frac - b.frac);
     const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
-    const NLANES = WAVE_GEO.lanes.length;
-    const spanSec = Math.max(1, s.end - s.start); // timeline span the seekbar shows, in seconds
 
-    // mepl = "minutes elapsed per length": how many minutes the timeline advances across one
-    // generic emote-width. Two surges closer than mepl in time would visually overlap, so we GROUP
-    // them; surges farther apart than mepl are shown separately. Expressed as a fraction of the bar
-    // it's just (emoteWidth / barWidth), which keeps grouping resolution-independent (a 10 min
-    // stream and a 6 h stream both group "emotes that would touch").
-    const EMOTE_W = WAVE_GEO.bubble + 6;                 // generic emote footprint incl. ring/spacing
-    const meplFrac = EMOTE_W / barW;                     // mepl as a fraction of the bar (= EMOTE_W px)
-    const meplMin = (spanSec / 60) * meplFrac;           // the named quantity, in minutes
-    // Group only when surges are within HALF an mepl: that tight, even different emotes would sit
-    // right on top of each other, so they collapse to one marker + "+N". Between 0.5·mepl and mepl
-    // there's room to bump the second emote up a lane (Stage 2) instead of hiding it.
-    const groupGapFrac = 0.5 * meplFrac;
+    // One emote's footprint as a fraction of the bar (bubble width + ring/spacing). Two markers
+    // closer than this would touch, so we GROUP them. As a bar-fraction it's resolution-independent
+    // (a 10 min and a 6 h stream both group "emotes that would touch").
+    const EMOTE_W = WAVE_GEO.bubble + 6;
+    const FP = EMOTE_W / barW;
 
-    // Stage 1 — GROUP (< 0.5·mepl): collapse each run into one marker = the strongest emote + a
-    // "+N" pill counting the OTHER distinct emotes in the group.
+    // Single lane (the lane-stacking mechanism is dropped for now). One left→right pass: group every
+    // emote that sits within one footprint of the current marker's ANCHOR (its first emote). A marker
+    // therefore never spans more than FP, and consecutive markers are always ≥ FP apart — so nothing
+    // overlaps (≈6px gap between bubbles). Anything closer just collapses into that marker's "+N".
     const groups = [];
-    for (const item of recs) {
+    for (const item of recs) {           // recs is already sorted by frac ascending
       const g = groups[groups.length - 1];
-      if (g && item.frac - g.lastFrac <= groupGapFrac) { g.items.push(item); g.lastFrac = item.frac; }
-      else groups.push({ items: [item], lastFrac: item.frac });
+      if (g && item.frac - g.frac < FP) g.items.push(item);
+      else groups.push({ items: [item], frac: item.frac });
     }
-    const markers = groups.map((g) => {
+
+    // Finalize each marker: leader (most unique viewers) = the shown emote + click-seek target; the
+    // other distinct emotes become the "+N" badge + the tooltip's stacked secondary list. Position
+    // stays the group's anchor `frac`, which is what guarantees the ≥ FP spacing.
+    const finalMarkers = groups.map((g) => {
       const byName = new Map();
       for (const it of g.items) {
         const ex = byName.get(it.rec.name);
         if (!ex || (it.rec.count || 0) > (ex.rec.count || 0)) byName.set(it.rec.name, it);
       }
       const distinct = [...byName.values()].sort((a, b) => (b.rec.count || 0) - (a.rec.count || 0));
-      // The strongest emote leads the marker; the rest become the "+N" badge + the tooltip's
-      // stacked secondary-emote pill.
       return {
-        lead: distinct[0].rec, frac: distinct[0].frac,
+        lead: distinct[0].rec, frac: g.frac,
         others: distinct.length - 1, secondary: distinct.slice(1).map((d) => d.rec),
       };
     });
 
-    // Stage 2 — LANES: separate markers still within ~mepl of each other (their bubbles would
-    // touch) get bumped UP a lane (lanes are spaced taller than a bubble, so they stay legible).
-    // Markers with room sit on lane 0, right on the wave.
-    const laneGapFrac = meplFrac;
-    const laneTail = new Array(NLANES).fill(null); // last frac placed per lane
-    for (const m of markers) {
-      let lane = NLANES - 1; // fall back to the top lane if everything is occupied
-      for (let l = 0; l < NLANES; l++) {
-        const t = laneTail[l];
-        if (t === null || m.frac - t >= laneGapFrac) { lane = l; break; }
-      }
-      m.lane = lane;
-      laneTail[lane] = m.frac;
-    }
-
     const accent = waveColor();
     const frag = document.createDocumentFragment();
-    for (const m of markers) {
-      const lead = m.lead, frac = m.frac, laneY = WAVE_GEO.lanes[m.lane];
+    for (const m of finalMarkers) {
+      const lead = m.lead, frac = m.frac, laneY = WAVE_GEO.lanes[0];
       const leftPct = (frac * 100) + "%";
       const crestPx = Math.max(2, waveHeightAtFrac(frac) * WAVE_GEO.band);
 
@@ -2065,14 +2059,22 @@
   function buildDockTabs() {
     const bar = document.createElement("div");
     bar.className = "meridian-dock-tabs";
-    const native = document.createElement("button");
-    native.className = "meridian-dock-tab";
-    native.dataset.tab = "native";
-    native.textContent = SITE.nativeChatLabel || "Site";
-    const twitch = document.createElement("button");
-    twitch.className = "meridian-dock-tab";
-    twitch.dataset.tab = "twitch";
-    twitch.textContent = "Twitch";
+    // Source-badge tabs: a colored dot per source (the site's brand color + Twitch violet) with an
+    // accent underline on the active one, so it reads as "which chat am I looking at".
+    const mkTab = (tab, label, color) => {
+      const b = document.createElement("button");
+      b.className = "meridian-dock-tab";
+      b.dataset.tab = tab;
+      b.style.setProperty("--tab-color", color);
+      const dot = document.createElement("span");
+      dot.className = "meridian-dock-tab-dot";
+      const txt = document.createElement("span");
+      txt.textContent = label;
+      b.append(dot, txt);
+      return b;
+    };
+    const native = mkTab("native", SITE.nativeChatLabel || "Site", SITE.brandColor || "#FF0033");
+    const twitch = mkTab("twitch", "Twitch", "#9146FF");
     bar.append(native, twitch);
     bar.addEventListener("click", (e) => {
       const b = e.target.closest(".meridian-dock-tab");

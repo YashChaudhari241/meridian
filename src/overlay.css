@@ -12,12 +12,13 @@
   --meridian-header-h: 30px;
   --meridian-input-h: 44px;
   --meridian-blur: 6px;
-  color: #f1f1f1;
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --meridian-radius: 14px;
+  color: #F5F5F6;
+  font-family: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: var(--meridian-font);
   background: transparent;
   user-select: none;
-  border-radius: 8px;
+  border-radius: var(--meridian-radius);
 }
 .meridian-root.meridian-hidden { display: none; }
 
@@ -30,12 +31,12 @@
   right: 0;
   top: var(--meridian-header-h);
   bottom: var(--meridian-input-h);
-  background: rgba(15, 15, 18, var(--meridian-opacity));
-  backdrop-filter: blur(var(--meridian-blur));
-  -webkit-backdrop-filter: blur(var(--meridian-blur));
+  background: rgba(18, 18, 21, var(--meridian-opacity));
+  backdrop-filter: blur(var(--meridian-blur)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--meridian-blur)) saturate(1.3);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  border-radius: var(--meridian-radius);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
   transition: top 140ms ease, bottom 140ms ease;
   z-index: 0;
   pointer-events: none;
@@ -68,10 +69,15 @@
   gap: 5px;
   padding: 4px 5px;
   box-sizing: border-box;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(13, 13, 16, 0.92);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
   z-index: 2;
   opacity: 0;
+  transition: opacity 160ms cubic-bezier(.2,.6,.2,1);
 }
+.meridian-root.meridian-dragging .meridian-header,
+.meridian-root.meridian-dragging .meridian-input-wrap { transition: none; }
 /* Children non-interactive while bars are hidden, so a stray click on the
    invisible header drags the overlay instead of hitting a button. */
 .meridian-header > *,
@@ -79,11 +85,15 @@
 .meridian-header {
   top: 0;
   height: var(--meridian-header-h);
+  /* Compact: the inner controls are kept short (~20px) so this symmetric vertical padding actually
+     shows as breathing room rather than being swallowed by oversized input boxes. */
+  padding: 5px 5px;
+  gap: 4px;
   cursor: grab;
-  font-size: 12px;
-  border-top-left-radius: 8px;
-  border-top-right-radius: 8px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 11px;
+  border-top-left-radius: var(--meridian-radius);
+  border-top-right-radius: var(--meridian-radius);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
 }
 .meridian-header.dragging { cursor: grabbing; }
 .meridian-input-wrap {
@@ -94,9 +104,9 @@
   gap: 6px;
   /* Stretch so the send button matches the input's height exactly. */
   align-items: stretch;
-  border-bottom-left-radius: 8px;
-  border-bottom-right-radius: 8px;
-  border-top: 1px solid rgba(255,255,255,0.06);
+  border-bottom-left-radius: var(--meridian-radius);
+  border-bottom-right-radius: var(--meridian-radius);
+  border-top: 1px solid rgba(255,255,255,0.10);
 }
 .meridian-root:hover:not(.meridian-idle) .meridian-header,
 .meridian-root:focus-within:not(.meridian-idle) .meridian-header,
@@ -116,88 +126,128 @@
   flex: 1;
   display: flex;
   align-items: center;
-  background: rgba(255,255,255,0.06);
-  border-radius: 4px;
-  padding: 0 4px 0 6px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid #38383F;
+  border-radius: 6px;
+  /* Match the chat-delay pill exactly: same box height (20px incl. border) and the same visible
+     inset before the first glyph (≈ the gap between the delay's "−" and its left edge). */
+  box-sizing: border-box;
+  height: 20px;
+  padding: 0 5px;
   min-width: 0;
+  /* The prefix + name scroll together: when the channel name overflows, `twitch.tv/` slides off
+     to the left instead of permanently occupying space. Scrollbar hidden. */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.meridian-channel-prefix { font-size: 11px; opacity: 0.6; flex: none; }
+.meridian-channel-field::-webkit-scrollbar { display: none; }
+.meridian-channel-prefix {
+  font-size: 10px; color: #5C5C65; flex: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+}
 .meridian-channel {
-  flex: 1;
-  min-width: 0;
+  /* Auto-size to its content (Chromium `field-sizing`) so the whole field overflows + scrolls as a
+     unit, rather than the input scrolling internally while the prefix stays pinned. */
+  flex: 0 0 auto;
+  field-sizing: content;
+  min-width: 2ch;
+  max-width: 100%;
   background: transparent;
   border: none;
-  color: inherit;
+  color: #F5F5F6;
   font: inherit;
-  font-size: 12px;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1.25;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
   outline: none;
-  padding: 3px 2px;
+  padding: 1px 1px 1px 3px;   /* small inner left padding so the name isn't glued to the prefix */
+  white-space: nowrap;
 }
 .meridian-channel:focus { color: #fff; }
 .meridian-channel-reset {
   background: transparent;
   border: none;
-  color: #ccc;
+  color: #82828C;
   cursor: pointer;
-  font-size: 13px;
-  padding: 0 4px;
+  flex: none;
+  width: 18px; height: 18px;
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 0;
   line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.meridian-channel-reset:hover { color: #fff; }
+.meridian-channel-reset:hover { color: #fff; background: rgba(255,255,255,0.08); }
 .meridian-channel-reset[hidden] { display: none; }
 
 /* Follow heart (signed-in only) — sits where the reset icon would, opens twitch.tv to follow. */
 .meridian-channel-follow {
   background: transparent;
   border: none;
-  color: #c9c9d0;
+  color: #5C5C65;
   cursor: pointer;
-  padding: 0 3px;
+  width: 18px; height: 18px;
+  border-radius: 5px;
   line-height: 0;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   flex: none;
+  transition: background 130ms cubic-bezier(.2,.6,.2,1), color 130ms cubic-bezier(.2,.6,.2,1);
 }
-.meridian-channel-follow svg { fill: none; stroke: currentColor; stroke-width: 2; display: block; }
-.meridian-channel-follow:hover { color: #ff6b81; }
+.meridian-channel-follow svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; display: block; }
+.meridian-channel-follow:hover { color: #8257FF; background: rgba(130,87,255,0.16); }
 .meridian-channel-follow[hidden] { display: none; }
 
 .meridian-delay {
   display: flex;
   align-items: center;
-  gap: 2px;
-  background: rgba(255,255,255,0.06);
-  border-radius: 999px;
-  padding: 1px 4px;
+  gap: 1px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid #38383F;
+  border-radius: 6px;
+  padding: 0;
   flex: none;
 }
-.meridian-delay-icon { font-size: 11px; opacity: 0.7; padding: 0 2px; }
+.meridian-delay-icon { display: none; }
 .meridian-delay-val {
-  font-size: 11px;
-  width: 32px;
+  font-size: 10.5px;
+  font-weight: 600;
+  width: 22px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   background: transparent;
   border: none;
   outline: none;
-  color: inherit;
-  font-family: inherit;
+  color: #F5F5F6;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
   padding: 0;
 }
 .meridian-delay-val:focus { color: #fff; }
+/* −/+ stepper buttons inside the delay pill. */
+.meridian-delay .meridian-btn {
+  width: 17px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border-radius: 5px; color: #B4B4BC; font-size: 12px;
+}
 
 .meridian-btn {
   background: transparent;
   border: none;
-  color: #ddd;
+  color: #82828C;
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 12px;
+  width: 21px; height: 21px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 12.5px;
   line-height: 1;
   flex: none;
+  transition: background 130ms cubic-bezier(.2,.6,.2,1), color 130ms cubic-bezier(.2,.6,.2,1);
 }
-.meridian-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.meridian-btn:hover { background: rgba(255,255,255,0.08); color: #F5F5F6; }
 
 .meridian-status {
   position: absolute;
@@ -321,11 +371,13 @@
 
 .meridian-input {
   flex: 1;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: #fff;
-  border-radius: 4px;
-  padding: 5px 8px;
+  display: flex;
+  align-items: center;        /* vertically center the placeholder + typed text */
+  background: rgba(255,255,255,0.06);
+  border: 1px solid #38383F;
+  color: #F5F5F6;
+  border-radius: 9px;
+  padding: 0 10px;
   font: inherit;
   outline: none;
   user-select: text;
@@ -338,7 +390,7 @@
   scrollbar-width: none;
 }
 .meridian-input::-webkit-scrollbar { display: none; }
-.meridian-input:focus { border-color: rgba(255,255,255,0.3); }
+.meridian-input:focus { border-color: #8257FF; box-shadow: 0 0 0 3px rgba(130,87,255,0.16); }
 .meridian-input.disabled { opacity: 0.5; pointer-events: none; }
 .meridian-input:empty::before {
   content: attr(data-placeholder);
@@ -351,19 +403,21 @@
   margin: 0 1px;
 }
 .meridian-send {
-  background: #9146ff;
+  background: #8257FF;
   color: #fff;
   border: none;
-  border-radius: 4px;
-  padding: 5px 8px;
+  border-radius: 9px;
+  padding: 5px 9px;
   cursor: pointer;
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: background 130ms cubic-bezier(.2,.6,.2,1);
 }
 .meridian-send svg { display: block; }
-.meridian-send:hover { background: #a970ff; }
+.meridian-send:hover { background: #9270FF; }
+.meridian-send:active { background: #6F40F2; }
 .meridian-send:disabled { opacity: 0.5; cursor: default; }
 
 .meridian-suggest {
@@ -390,7 +444,7 @@
   cursor: pointer;
 }
 .meridian-suggest-item.selected,
-.meridian-suggest-item:hover { background: rgba(145, 70, 255, 0.3); }
+.meridian-suggest-item:hover { background: rgba(130, 87, 255, 0.28); }
 .meridian-suggest-item img { height: 1.6em; }
 .meridian-suggest-item .prov { margin-left: auto; opacity: 0.5; font-size: 10px; }
 
@@ -412,15 +466,15 @@
   right: 24px;
   z-index: 2147483601;
   background: rgba(18, 16, 28, 0.6);
-  color: #c9a6ff;
-  border: 1px solid rgba(145, 70, 255, 0.35);
+  color: #C6B0FF;
+  border: 1px solid rgba(130, 87, 255, 0.4);
   border-radius: 999px;
   width: 32px;
   height: 32px;
   cursor: pointer;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  backdrop-filter: blur(8px) saturate(1.3);
+  -webkit-backdrop-filter: blur(8px) saturate(1.3);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.45);
   display: none;
   align-items: center;
   justify-content: center;
@@ -429,12 +483,12 @@
 }
 .meridian-toggle:hover {
   background: rgba(28, 22, 44, 0.75);
-  color: #e0c8ff;
-  border-color: rgba(145, 70, 255, 0.6);
+  color: #E1D6FF;
+  border-color: rgba(130, 87, 255, 0.65);
 }
 .meridian-toggle.show { display: inline-flex; }
 
-.meridian-btn.active { color: #c9a6ff; background: rgba(145, 70, 255, 0.18); }
+.meridian-btn.active { color: #A98AFF; background: rgba(130, 87, 255, 0.16); }
 
 /* ---- Docked mode: an absolute overlay inside the site's native chat frame, with a tab bar
    pinned over the top. Nothing consumes layout (so the site's chat send-button can't be pushed
@@ -449,21 +503,43 @@
   height: 34px;
   display: flex;
   z-index: 2147483600;
-  background: rgb(18, 18, 22);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0C0C0F;
+  border-bottom: 1px solid #2A2A31;
 }
 .meridian-dock-tab {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   background: transparent;
   border: none;
-  color: #bbb;
-  font: 600 12px "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #82828C;
+  font: 500 13px "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
   outline: none;
+  position: relative;
+  transition: color 130ms cubic-bezier(.2,.6,.2,1), background 130ms cubic-bezier(.2,.6,.2,1);
 }
-.meridian-dock-tab:hover { color: #fff; }
-.meridian-dock-tab.active { color: #fff; border-bottom-color: #9146ff; }
+/* Source-color dot (set per tab via --tab-color). */
+.meridian-dock-tab-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--tab-color, #9146FF);
+  opacity: 0.45; flex: none;
+  transition: opacity 130ms cubic-bezier(.2,.6,.2,1), box-shadow 130ms cubic-bezier(.2,.6,.2,1);
+}
+.meridian-dock-tab:hover { color: #B4B4BC; }
+.meridian-dock-tab.active { color: #F5F5F6; font-weight: 600; background: #141417; }
+.meridian-dock-tab.active .meridian-dock-tab-dot {
+  opacity: 1;
+  box-shadow: 0 0 7px var(--tab-color, #9146FF);
+}
+/* Active underline in the source color. */
+.meridian-dock-tab.active::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 2.5px; background: var(--tab-color, #9146FF);
+}
 /* Reserve the tab bar's 34px inside YouTube's native chat so its top dropdown isn't covered
    on the native tab — the chat *shrinks* to fit (it isn't pushed down), so the send button
    stays on screen even in fullscreen. (Verified live: iframe is position:static, so margin.) */
@@ -499,10 +575,17 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
 .meridian-docked .meridian-bg {
   top: 0;
   bottom: 0;
-  background: rgb(18, 18, 22);
+  background: #141417;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   border-radius: 0;
+}
+/* Docked: bars are opaque (design bg-2), not the floating glass. */
+.meridian-docked .meridian-header,
+.meridian-docked .meridian-input-wrap {
+  background: #1B1B20;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 /* Header sits directly under the tab bar — no top rounding of its own. */
 .meridian-docked .meridian-header {
@@ -678,17 +761,17 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
   display: none;
   align-items: center;
   gap: 5px;
-  background: #9146ff;
+  background: #8257FF;
   color: #fff;
   border: none;
   border-radius: 999px;
   padding: 4px 11px 4px 9px;
-  font: 600 11px/1 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 600 11px/1 "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   cursor: pointer;
   z-index: 4;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   white-space: nowrap;
 }
 .meridian-resume.show { display: inline-flex; }
-.meridian-resume:hover { background: #a970ff; }
+.meridian-resume:hover { background: #9270FF; }
 .meridian-resume svg { display: block; }
