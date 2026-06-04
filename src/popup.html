@@ -132,6 +132,20 @@ destiny = destiny"></textarea>
         <button id="clearHighlightCache" class="secondary">Clear highlight cache</button>
         <span id="clearHighlightMsg" class="hint" style="width:auto;"></span>
       </div>
+      <label id="thresholdLabel" style="margin-top:10px;" title="Unique viewers needed within the highlight window to mark an emote surge">Emote highlight threshold (unique viewers)</label>
+      <div class="row" title="Unique viewers needed within the highlight window to mark an emote surge">
+        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
+        <button id="saveHighlightThreshold">Save</button>
+        <button id="saveGlobalThreshold" class="secondary" title="Save as the default threshold used for channels without their own value">Set global</button>
+      </div>
+      <span id="highlightThresholdHint" class="hint"></span>
+      <label id="windowLabel" style="margin-top:10px;" title="Length of the rolling window the unique-viewer count is measured over (smaller = needs a faster burst)">Emote highlight window (seconds)</label>
+      <div class="row" title="Length of the rolling window the unique-viewer count is measured over (smaller = needs a faster burst)">
+        <input id="highlightWindow" type="number" min="2" max="120" step="1" />
+        <button id="saveHighlightWindow">Save</button>
+        <button id="saveGlobalWindow" class="secondary" title="Save as the default window used for channels without their own value">Set global</button>
+      </div>
+      <span id="highlightWindowHint" class="hint"></span>
     </div>
     <details class="card" id="advancedCard">
       <summary>Advanced</summary>
@@ -143,11 +157,6 @@ destiny = destiny"></textarea>
       <div class="row" title="Shift the wave and markers this many seconds into the past for reaction time">
         <input id="highlightOffset" type="number" min="0" max="120" step="1" />
         <button id="saveHighlightOffset">Save</button>
-      </div>
-      <label style="margin-top:10px;" title="Unique viewers needed within about twelve seconds to mark an emote surge">Threshold (unique viewers / ~12 s)</label>
-      <div class="row" title="Unique viewers needed within about twelve seconds to mark an emote surge">
-        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
-        <button id="saveHighlightThreshold">Save</button>
       </div>
     </details>
     <div class="card" title="Remove moderated messages instead of dimming them">

@@ -11,6 +11,7 @@
   --meridian-font: 13px;
   --meridian-header-h: 30px;
   --meridian-input-h: 44px;
+  --meridian-banner-h: 19px;
   --meridian-blur: 6px;
   --meridian-radius: 14px;
   color: #F5F5F6;
@@ -136,25 +137,32 @@
   height: 20px;
   padding: 0 22px 0 5px;  /* right padding for the heart icon */
   min-width: 0;
-  /* The prefix + name scroll together: when the channel name overflows, `twitch.tv/` slides off
-     to the left instead of permanently occupying space. Scrollbar hidden. */
-  overflow-x: auto;
-  scrollbar-width: none;
   white-space: nowrap;
+  /* The input fills the field (see below) so clicking beside the name edits it; the `twitch.tv/`
+     prefix + heart strip keep the header's grab cursor and act as a drag handle. */
+  cursor: grab;
 }
+.meridian-channel-field:active { cursor: grabbing; }
 .meridian-channel-field::-webkit-scrollbar { display: none; }
+/* Holds the prefix + input; stretches to fill the field so the input gets all the free width. */
+.meridian-channel-scroll {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
 .meridian-channel-prefix {
   font-size: 10px; color: #5C5C65; flex: none;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   white-space: nowrap;
 }
 .meridian-channel {
-  /* Auto-size to its content (Chromium `field-sizing`) so the whole field overflows + scrolls as a
-     unit, rather than the input scrolling internally while the prefix stays pinned. */
-  flex: 0 0 auto;
-  field-sizing: content;
-  min-width: 2ch;
-  max-width: 100%;
+  /* Fill the remaining width so there's no dead space beside the name (the entire field is the
+     input's hit area). On overflow the input scrolls internally; the prefix stays pinned. */
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: text;
   background: transparent;
   border: none;
   color: #F5F5F6;
@@ -250,6 +258,68 @@
 }
 .meridian-status:empty { display: none; }
 
+/* Status banners — float at the top of the messages area (no layout consumed). Shared pill style
+   with a pulsing dot + sliding shimmer; color set per-kind via CSS vars. Connecting = blue, error/
+   disconnected = red, delay-buffering = violet. Only one shows at a time (conn banner has priority).
+   Lives inside `root`, so it appears in both floating-overlay and docked modes. */
+.meridian-banner {
+  --banner-color: 130, 87, 255;          /* default violet (rgb triplet for rgba()) */
+  position: absolute;
+  top: var(--meridian-header-h);
+  left: 0;
+  right: 0;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  height: var(--meridian-banner-h);
+  padding: 0 9px;
+  box-sizing: border-box;
+  font: 600 10px/1 "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: 0.02em;
+  color: rgb(var(--banner-color));
+  /* Solid (opaque) so chat text never shows through, even before the messages shift down. The
+     accent tint sits over a dark base. */
+  background: linear-gradient(rgba(var(--banner-color), 0.28), rgba(var(--banner-color), 0.12)), #161319;
+  border-bottom: 1px solid rgba(var(--banner-color), 0.4);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+.meridian-banner.show { display: flex; }
+.meridian-banner-text {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  filter: brightness(1.35);              /* lift the text above the tinted fill for legibility */
+}
+.meridian-banner-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--banner-color));
+  animation: meridian-banner-pulse 1.1s ease-in-out infinite;
+}
+.meridian-banner-shimmer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 35%;
+  background: linear-gradient(90deg, transparent, rgb(var(--banner-color)), transparent);
+  animation: meridian-banner-shimmer 1.5s linear infinite;
+}
+/* Per-kind colors. */
+.meridian-conn-banner { --banner-color: 86, 168, 255; }          /* blue: connecting */
+.meridian-conn-banner.error { --banner-color: 255, 92, 92; }     /* red: error / disconnected */
+.meridian-delay-banner { --banner-color: 130, 87, 255; }         /* violet: delay buffering */
+@keyframes meridian-banner-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1.15); box-shadow: 0 0 6px rgba(var(--banner-color), 0.9); }
+}
+@keyframes meridian-banner-shimmer {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(400%); }
+}
+
 /* Messages — fills the middle, between the (always-present) bars. */
 .meridian-messages {
   position: absolute;
@@ -267,6 +337,8 @@
   scrollbar-color: transparent transparent;
   transition: scrollbar-color 180ms ease;
 }
+/* When a status banner is up, drop the messages below it so the (solid) banner never overlaps. */
+.meridian-root.meridian-has-banner .meridian-messages { top: calc(var(--meridian-header-h) + var(--meridian-banner-h)); }
 .meridian-messages.scrolling { scrollbar-color: rgba(255,255,255,0.25) transparent; }
 .meridian-messages::-webkit-scrollbar { width: 6px; background: transparent; }
 .meridian-messages::-webkit-scrollbar-track { background: transparent; }

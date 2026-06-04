@@ -96,7 +96,7 @@ const defaults = {
   blockedWords: [], hideDeleted: true,
   hidden: false, extensionEnabled: true,
   sites: {},
-  highlightTimeline: true, highlightEnabled: true, highlightThreshold: 5, highlightAnchorLive: true,
+  highlightTimeline: true, highlightEnabled: true, highlightThreshold: 5, highlightThresholds: {}, highlightWindowSec: 12, highlightWindows: {}, highlightAnchorLive: true,
   highlightOffsetSec: 5, highlightColor: "#b388ff",
   highlightPersistEmotes: true, highlightPersistDensity: true,
   emote7tv: true, emoteBttv: true, emoteFfz: true,
@@ -159,7 +159,42 @@ async function loadAllFields() {
   $("#highlightTimeline").checked = p.highlightTimeline === true;
   $("#highlightEnabled").checked = p.highlightEnabled === true;
   $("#highlightAnchorLive").checked = p.highlightAnchorLive !== false;
-  $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 5);
+  // Per-channel threshold/window: scope to the channel the ACTIVE TAB is currently on (asked
+  // directly via a content-script message — the global `_activeChannel` storage key can be stale
+  // when several tabs are open). Fall back to the stored key, then to global.
+  let liveChannel = "";
+  try {
+    if (activeTab?.id) {
+      const r = await chrome.tabs.sendMessage(activeTab.id, { type: "GET_ACTIVE_CHANNEL" });
+      liveChannel = (r?.channel || "").toLowerCase();
+    }
+  } catch { /* no content script on this tab (e.g. not YouTube/Kick) */ }
+  const activeCh = liveChannel || (p._activeChannel || "").toLowerCase();
+  const perCh = activeCh ? p.highlightThresholds?.[activeCh] : undefined;
+  if (activeCh) {
+    $("#highlightThreshold").value = Math.max(3, (perCh ?? p.highlightThreshold ?? 5));
+    $("#thresholdLabel").textContent = `Emote highlight threshold for ${activeCh} (unique viewers)`;
+    $("#highlightThresholdHint").textContent = perCh != null
+      ? `per-channel · "Save" sets ${activeCh}, "Set global" sets the default (${p.highlightThreshold ?? 5})`
+      : `using global default (${p.highlightThreshold ?? 5}) · "Save" sets ${activeCh}, "Set global" sets the default`;
+  } else {
+    $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 5);
+    $("#thresholdLabel").textContent = "Emote highlight threshold (unique viewers)";
+    $("#highlightThresholdHint").textContent = "no channel active — editing the global default";
+  }
+  // Per-channel window: same pattern as the threshold.
+  const perWin = activeCh ? p.highlightWindows?.[activeCh] : undefined;
+  if (activeCh) {
+    $("#highlightWindow").value = Math.max(2, Math.min(120, (perWin ?? p.highlightWindowSec ?? 12)));
+    $("#windowLabel").textContent = `Emote highlight window for ${activeCh} (seconds)`;
+    $("#highlightWindowHint").textContent = perWin != null
+      ? `per-channel · "Save" sets ${activeCh}, "Set global" sets the default (${p.highlightWindowSec ?? 12}s)`
+      : `using global default (${p.highlightWindowSec ?? 12}s) · "Save" sets ${activeCh}, "Set global" sets the default`;
+  } else {
+    $("#highlightWindow").value = Math.max(2, Math.min(120, p.highlightWindowSec ?? 12));
+    $("#windowLabel").textContent = "Emote highlight window (seconds)";
+    $("#highlightWindowHint").textContent = "no channel active — editing the global default";
+  }
   $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
   $("#highlightColor").value = p.highlightColor || "#b388ff";
   $("#highlightColorAppearance").value = p.highlightColor || "#b388ff";
@@ -301,9 +336,47 @@ $("#highlightColorAppearance").addEventListener("input", async (e) => {
 });
 $("#saveHighlightThreshold").addEventListener("click", async () => {
   const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 5));
-  await setPrefs({ highlightThreshold: v });
+  const p = await getPrefs();
+  const ch = (p._activeChannel || "").toLowerCase();
+  if (ch) {
+    const thresholds = { ...(p.highlightThresholds || {}), [ch]: v };
+    await setPrefs({ highlightThresholds: thresholds });
+    $("#highlightThresholdHint").textContent = `per-channel · "Save" sets ${ch}, "Set global" sets the default (${p.highlightThreshold ?? 5})`;
+  } else {
+    await setPrefs({ highlightThreshold: v });
+  }
   $("#highlightThreshold").value = v;
   flash($("#saveHighlightThreshold"));
+});
+// Always writes the global/default threshold (used by any channel without its own override).
+$("#saveGlobalThreshold").addEventListener("click", async () => {
+  const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 5));
+  await setPrefs({ highlightThreshold: v });
+  $("#highlightThreshold").value = v;
+  flash($("#saveGlobalThreshold"));
+  loadAllFields(); // refresh the hint to reflect the new global default
+});
+$("#saveHighlightWindow").addEventListener("click", async () => {
+  const v = Math.max(2, Math.min(120, parseInt($("#highlightWindow").value, 10) || 12));
+  const p = await getPrefs();
+  const ch = (p._activeChannel || "").toLowerCase();
+  if (ch) {
+    const windows = { ...(p.highlightWindows || {}), [ch]: v };
+    await setPrefs({ highlightWindows: windows });
+    $("#highlightWindowHint").textContent = `per-channel · "Save" sets ${ch}, "Set global" sets the default (${p.highlightWindowSec ?? 12}s)`;
+  } else {
+    await setPrefs({ highlightWindowSec: v });
+  }
+  $("#highlightWindow").value = v;
+  flash($("#saveHighlightWindow"));
+});
+// Always writes the global/default window (used by any channel without its own override).
+$("#saveGlobalWindow").addEventListener("click", async () => {
+  const v = Math.max(2, Math.min(120, parseInt($("#highlightWindow").value, 10) || 12));
+  await setPrefs({ highlightWindowSec: v });
+  $("#highlightWindow").value = v;
+  flash($("#saveGlobalWindow"));
+  loadAllFields(); // refresh the hint to reflect the new global default
 });
 $("#saveHighlightOffset").addEventListener("click", async () => {
   const v = Math.max(0, Math.min(120, parseInt($("#highlightOffset").value, 10) || 0));

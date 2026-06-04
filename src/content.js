@@ -79,7 +79,10 @@
     sites: {},                   // per-host: { "<host>": { mode, hidden } } (hidden = transient, toggled by the bubble)
     highlightTimeline: true,     // master: msgs/sec density wave on the live seekbar
     highlightEnabled: true,      // emote-surge markers on the wave (requires highlightTimeline)
-    highlightThreshold: 5,       // fixed: unique viewers per ~12 s window (floor 3)
+    highlightThreshold: 5,       // global default: unique viewers per window (floor 3)
+    highlightThresholds: {},     // per-channel overrides: { "channel": threshold }
+    highlightWindowSec: 12,      // global default: rolling window the unique-viewer count is measured over (2..120)
+    highlightWindows: {},        // per-channel window overrides: { "channel": seconds }
     highlightAnchorLive: true,   // anchor highlights at the live edge (scroll left) vs. the viewer's seek position
     highlightOffsetSec: 5,       // shift highlights this many sec into the past (human reaction time)
     highlightColor: "#b388ff",   // wave + emote-marker accent color (light purple)
@@ -329,6 +332,16 @@
       <button class="meridian-btn" data-act="hide" title="Hide">×</button>
     </div>
     <div class="meridian-status"></div>
+    <div class="meridian-banner meridian-conn-banner">
+      <span class="meridian-banner-dot"></span>
+      <span class="meridian-banner-text"></span>
+      <span class="meridian-banner-shimmer"></span>
+    </div>
+    <div class="meridian-banner meridian-delay-banner">
+      <span class="meridian-banner-dot"></span>
+      <span class="meridian-banner-text"></span>
+      <span class="meridian-banner-shimmer"></span>
+    </div>
     <div class="meridian-messages"></div>
     <button class="meridian-resume" title="Resume autoscroll"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><polygon points="6 4 20 12 6 20"></polygon></svg>Autoscroll</button>
     <div class="meridian-suggest"></div>
@@ -355,6 +368,10 @@
     follow: root.querySelector(".meridian-channel-follow"),
     delayVal: root.querySelector(".meridian-delay-val"),
     status: root.querySelector(".meridian-status"),
+    delayBanner: root.querySelector(".meridian-delay-banner"),
+    delayBannerText: root.querySelector(".meridian-delay-banner .meridian-banner-text"),
+    connBanner: root.querySelector(".meridian-conn-banner"),
+    connBannerText: root.querySelector(".meridian-conn-banner .meridian-banner-text"),
     messages: root.querySelector(".meridian-messages"),
     input: root.querySelector(".meridian-input"),
     send: root.querySelector(".meridian-send"),
@@ -482,9 +499,13 @@
   // keydown handled in the document-level capture listener (search "isOurInput").
   els.channel.addEventListener("blur", commitChannelInput);
   els.channel.addEventListener("input", updateHeart);
+  // The input fills the field, so clicking beside the name still edits. The `twitch.tv/` prefix and
+  // the heart strip are NOT part of the input: they inherit the header's grab cursor and start a
+  // drag (the prefix is uneditable, by design).
   // Rest scrolled to the LEFT (showing `twitch.tv/` + the start of the name) by default and whenever
   // the field loses focus. While focused/typing the browser keeps the caret in view natively.
   function scrollChannelToStart() {
+    els.channel.scrollLeft = 0;             // input scrolls internally now (fills the field)
     const f = els.channel.parentElement;
     if (f) f.scrollLeft = 0;
   }
@@ -822,6 +843,47 @@
     if (m.self || (prefs.chatDelaySec || 0) <= 0) { scheduleRender(m); return; }
     queue.push(m);
     schedulePump();
+    updateDelayBanner();
+  }
+  // --- status banners (connection + delay buffering) ---
+  // Both float at the top of the messages area (inside `root` → shown in overlay AND docked mode),
+  // same pill style, pulsing dot + sliding shimmer. The connection banner takes priority over the
+  // delay banner (you can't be buffering delayed chat before you've connected).
+  let connState = "connecting";   // connecting | connected | joined | disconnected | error
+  let delayPrimed = false;        // true once the first delayed message has been shown this session
+  let delayTicker = null;
+  function startDelayTicker() { if (!delayTicker) delayTicker = setInterval(updateDelayBanner, 250); }
+  function stopDelayTicker() { if (delayTicker) { clearInterval(delayTicker); delayTicker = null; } }
+  function updateConnBanner() {
+    const connecting = connState === "connecting";
+    const failed = connState === "disconnected" || connState === "error";
+    const show = connecting || failed;
+    els.connBanner.classList.toggle("show", show);
+    els.connBanner.classList.toggle("error", failed);
+    if (show) {
+      els.connBannerText.textContent = connecting
+        ? "Connecting to Twitch chat…"
+        : connState === "error" ? "Connection error — reconnecting…" : "Disconnected — reconnecting…";
+    }
+    updateDelayBanner();          // delay banner is suppressed while the connection banner shows
+  }
+  function updateDelayBanner() {
+    const delay = prefs.chatDelaySec || 0;
+    const head = queue[0];
+    // Buffering indicator only: show while the delay is holding the FIRST message(s) back, and
+    // hide for good once a delayed message has actually appeared (delayPrimed). Re-armed on
+    // (re)connect / channel switch / delay change.
+    const connShowing = els.connBanner.classList.contains("show");
+    const waiting = delay > 0 && !!head && !delayPrimed && !connShowing;
+    els.delayBanner.classList.toggle("show", waiting);
+    // Shift the messages down so the (solid) banner never overlaps chat text.
+    root.classList.toggle("meridian-has-banner", waiting || connShowing);
+    if (!waiting) { stopDelayTicker(); return; }
+    const remain = Math.max(0, Math.ceil((head.ts + delay * 1000 - Date.now()) / 1000));
+    els.delayBannerText.textContent = remain > 0
+      ? `Buffering — first delayed message in ${remain}s`
+      : `Buffering delayed chat…`;
+    startDelayTicker();
   }
   function schedulePump() {
     if (pumpTimer) return;
@@ -832,15 +894,18 @@
   }
   function flushQueue() {
     const cutoff = Date.now() - (prefs.chatDelaySec || 0) * 1000;
-    while (queue.length && queue[0].ts <= cutoff) scheduleRender(queue.shift());
+    while (queue.length && queue[0].ts <= cutoff) { scheduleRender(queue.shift()); delayPrimed = true; }
     schedulePump();
+    updateDelayBanner();
   }
   async function setDelay(sec) {
     prefs.chatDelaySec = sec;
     await savePrefs();
     applyDelayDisplay();
     if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
+    delayPrimed = false;          // re-arm the buffering indicator for the new delay
     flushQueue();
+    updateDelayBanner();
   }
   function applyDelayDisplay() {
     if (document.activeElement === els.delayVal) return;
@@ -898,7 +963,7 @@
         new Promise((res) => setTimeout(() => res(null), 3000))
       ]);
       if (!pageActive) return;        // page went inactive while we awaited
-      if (!resp?.ok || !resp.auth) { setStatus("connecting…"); return; }
+      if (!resp?.ok || !resp.auth) { connState = "connecting"; setStatus("connecting…"); updateConnBanner(); return; }
       currentAuth = resp.auth;
       emoteReg = new EmoteRegistry({
         getAuth: () => currentAuth,
@@ -914,7 +979,7 @@
         displayName: currentAuth.displayName || currentAuth.login,
         anonymous: currentAuth.kind === "anonymous",
         onMessage: enqueue,
-        onStatus: (s) => setStatus(formatStatus(s))
+        onStatus: (s) => { connState = s.state; setStatus(formatStatus(s)); updateConnBanner(); }
       });
       irc.connect();
       syncChannel();
@@ -939,9 +1004,12 @@
   }
   function disconnectIRC() {
     if (irc) { irc.disconnect(); irc = null; lastJoined = ""; }
+    chrome.storage.local.set({ [PREFS_KEY]: { ...prefs, _activeChannel: "" } }).catch(() => {});
     // clear pending delay queue so it doesn't dump after reconnect
     queue.length = 0;
     if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
+    delayPrimed = false;          // re-arm the buffering indicator for the next connection
+    updateDelayBanner();
   }
 
   let lastJoined = "";
@@ -952,10 +1020,23 @@
       irc.join(target);
       lastJoined = target;
       chatters.clear(); // reset suggestions for the new channel (NAMES will reseed)
+      queue.length = 0; delayPrimed = false; updateDelayBanner(); // re-arm buffering for the new channel
       emoteReg?.loadForChannel(target).catch(() => {});
+      // Expose the active channel so the popup can show per-channel settings.
+      prefs._activeChannel = target;
+      chrome.storage.local.set({ [PREFS_KEY]: { ...prefs, _activeChannel: target } }).catch(() => {});
     }
     updateChannelControls();
   }
+
+  // The popup asks the *active tab* for its live channel (more reliable than the global
+  // `_activeChannel` storage key, which goes stale across tabs) to scope per-channel settings.
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type === "GET_ACTIVE_CHANNEL") {
+      sendResponse({ channel: (lastJoined || resolveChannel() || "").toLowerCase() });
+      return true;
+    }
+  });
 
   // --- storage changes ---
   chrome.storage.onChanged.addListener(async (changes, area) => {
@@ -1020,7 +1101,13 @@
     // reconnect. The `connecting` guard inside ensureConnected makes overlapping calls a no-op.
     if (!irc && effectiveMode() !== "hidden") ensureConnected();
     const h = SITE.detectHandle();
-    if (h !== detectedHandle) { detectedHandle = h; syncChannel(); }
+    if (h !== detectedHandle) {
+      detectedHandle = h;
+      // A manual channel override is scoped to the page it was typed on — navigating to a
+      // different stream must fall back to that channel's mapping, not carry the old override.
+      if (prefs.overrideChannel) { prefs.overrideChannel = ""; savePrefs(); }
+      syncChannel();
+    }
     else updateChannelInputFromPrefs();
     // Effective mode can flip on its own in "auto" (the chat frame loading/unloading), so re-run
     // the full dispatcher when it differs from what we last applied.
@@ -1141,7 +1228,15 @@
   }, { passive: true });
   els.resume.addEventListener("click", (e) => { e.stopPropagation(); resumeAutoscroll(); });
   els.resume.addEventListener("mousedown", (e) => e.stopPropagation());
-  // (no "scroll" listener — programmatic auto-scroll would falsely flash the scrollbar)
+  // If the user manually scrolls back down to the bottom, immediately re-engage autoscroll (no need
+  // to wait out the 8 s timeout). Only acts while paused; doesn't flash the scrollbar.
+  els.messages.addEventListener("scroll", () => {
+    if (!prefs.autoscroll || !userScrollUntil) return;
+    const m = els.messages;
+    // Generous threshold (~1.5 lines): on a fast chat the bottom keeps moving as messages arrive
+    // while paused, so an exact-bottom test can never be hit. Near-bottom is enough to re-engage.
+    if (m.scrollHeight - m.scrollTop - m.clientHeight <= 28) resumeAutoscroll();
+  }, { passive: true });
   // resume autoscroll after 8s; snap to bottom
   setInterval(() => {
     if (!prefs.autoscroll) { setResumePill(false); return; }
@@ -1165,7 +1260,7 @@
   const density = new DensityTracker({ baseRes: 2 });
   const highlights = new Map(); // key -> { name, url, count, threshold, wallTs, vt, behindLive }
   const hlEngine = new HighlightEngine({
-    windowMs: 12000,
+    getWindowMs: () => highlightWindow() * 1000,   // per-channel / global, resolved live
     getThreshold: highlightThreshold,
     onHighlight: addHighlight,
     onUpdate: bumpHighlight
@@ -1201,7 +1296,18 @@
     return (s.end - v.currentTime) <= 30; // within 30 s of the live edge counts as "live"
   }
 
-  function highlightThreshold() { return Math.max(3, prefs.highlightThreshold | 0 || 3); }
+  function highlightThreshold() {
+    const ch = (lastJoined || "").toLowerCase();
+    const per = ch && prefs.highlightThresholds?.[ch];
+    return Math.max(3, (per ?? prefs.highlightThreshold) | 0 || 5);
+  }
+  // Rolling unique-viewer window (seconds, clamped 2..120): per-channel override else the global.
+  function highlightWindow() {
+    const ch = (lastJoined || "").toLowerCase();
+    const per = ch && prefs.highlightWindows?.[ch];
+    const sec = (per ?? prefs.highlightWindowSec) | 0 || 12;
+    return Math.max(2, Math.min(120, sec));
+  }
   function highlightOffset() { const n = prefs.highlightOffsetSec; return Number.isFinite(n) ? Math.max(0, n) : 5; }
   function isLiveStream() {
     // `video.duration` is unreliable on YouTube live (often finite), so prefer the adapter's
@@ -1544,14 +1650,26 @@
     tip.style.left = leftPx + "px";
     tip.style.bottom = bottomPx + "px";
   }
+  // Auto-hide the tooltip after a few idle seconds, mirroring YouTube hiding its scrub preview when
+  // the cursor stops moving — otherwise a stationary hover leaves our tip floating indefinitely.
+  let surgeTipIdle = null;
+  function armSurgeTipIdle() {
+    if (surgeTipIdle) clearTimeout(surgeTipIdle);
+    surgeTipIdle = setTimeout(hideSurgeTip, 2500);
+  }
   function showSurgeTip(lead, frac, secondary) {
     if (!ensureSurgeTip()) return;
     surgeTipLead = { lead, frac, secondary };
     buildSurgeTipContent(lead, frac, secondary);
     positionSurgeTip(frac);
     surgeTip.style.display = "block";
+    armSurgeTipIdle();
   }
-  function hideSurgeTip() { surgeTipLead = null; if (surgeTip) surgeTip.style.display = "none"; }
+  function hideSurgeTip() {
+    if (surgeTipIdle) { clearTimeout(surgeTipIdle); surgeTipIdle = null; }
+    surgeTipLead = null;
+    if (surgeTip) surgeTip.style.display = "none";
+  }
 
   function renderEmotes() {
     if (!waveLayer) return;
@@ -1563,7 +1681,6 @@
       const frac = highlightFrac(rec, s);
       if (frac != null && frac >= 0 && frac <= 1) recs.push({ rec, frac });
     }
-    recs.sort((a, b) => a.frac - b.frac);
     const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
 
     // One emote's footprint as a fraction of the bar (bubble width + ring/spacing). Two markers
@@ -1572,36 +1689,46 @@
     const EMOTE_W = WAVE_GEO.bubble + 6;
     const FP = EMOTE_W / barW;
 
-    // Single lane (the lane-stacking mechanism is dropped for now). One left→right pass: group every
-    // emote that sits within one footprint of the current marker's ANCHOR (its first emote). A marker
-    // therefore never spans more than FP, and consecutive markers are always ≥ FP apart — so nothing
-    // overlaps (≈6px gap between bubbles). Anything closer just collapses into that marker's "+N".
-    const groups = [];
-    for (const item of recs) {           // recs is already sorted by frac ascending
-      const g = groups[groups.length - 1];
-      if (g && item.frac - g.frac < FP) g.items.push(item);
-      else groups.push({ items: [item], frac: item.frac });
+    // Cluster surges into non-overlapping markers, each anchored on its STRONGEST surge.
+    // Greedy by unique-viewer count (ties → earlier / left-most): walk surges strongest-first;
+    // each one either starts a new marker, or — if it falls within one footprint (FP) of an
+    // already-placed marker — is absorbed into the nearest such marker as a secondary. Because a
+    // surge only ever claims its own FP, markers are guaranteed pairwise ≥ FP apart (no overlap)
+    // while still sitting on the peak surge of their neighborhood. This avoids both failure modes:
+    // anchoring at the leftmost item (marker drifts off the real peak) and single-linkage chaining
+    // (a ramp of ever-stronger surges snowballing into one giant cluster — a new marker still only
+    // claims its own FP, so dense regions get one marker per FP, not one marker total).
+    const byStrength = recs.slice().sort((a, b) =>
+      (b.rec.count || 0) - (a.rec.count || 0) || a.frac - b.frac);
+    const markers = [];
+    for (const item of byStrength) {
+      let best = null, bestDist = Infinity;
+      for (const m of markers) {
+        const dist = Math.abs(item.frac - m.frac);
+        if (dist < FP && dist < bestDist) { bestDist = dist; best = m; }
+      }
+      if (best) best.members.push(item);
+      else markers.push({ lead: item.rec, frac: item.frac, members: [] });
     }
 
-    // Finalize each marker: leader (most unique viewers) = the shown emote + click-seek target; the
-    // other distinct emotes become the "+N" badge + the tooltip's stacked secondary list. Position
-    // stays the group's anchor `frac`, which is what guarantees the ≥ FP spacing.
-    const finalMarkers = groups.map((g) => {
+    // Finalize each marker: the "+N" badge / tooltip lists the OTHER distinct emote names absorbed
+    // here (a repeat surge of the leader's own emote collapses into the leader, not the count).
+    for (const m of markers) {
       const byName = new Map();
-      for (const it of g.items) {
+      for (const it of m.members) {
+        if (it.rec.name === m.lead.name) continue;
         const ex = byName.get(it.rec.name);
-        if (!ex || (it.rec.count || 0) > (ex.rec.count || 0)) byName.set(it.rec.name, it);
+        if (!ex || (it.rec.count || 0) > (ex.count || 0)) byName.set(it.rec.name, it.rec);
       }
-      const distinct = [...byName.values()].sort((a, b) => (b.rec.count || 0) - (a.rec.count || 0));
-      return {
-        lead: distinct[0].rec, frac: g.frac,
-        others: distinct.length - 1, secondary: distinct.slice(1).map((d) => d.rec),
-      };
-    });
+      m.secondary = [...byName.values()].sort((a, b) => (b.count || 0) - (a.count || 0));
+      m.others = m.secondary.length;
+    }
+
+    markers.sort((a, b) => a.frac - b.frac);
 
     const accent = waveColor();
     const frag = document.createDocumentFragment();
-    for (const m of finalMarkers) {
+    for (const m of markers) {
       const lead = m.lead, frac = m.frac, laneY = WAVE_GEO.lanes[0];
       const leftPct = (frac * 100) + "%";
       const crestPx = Math.max(2, waveHeightAtFrac(frac) * WAVE_GEO.band);
@@ -1633,10 +1760,8 @@
         badge.textContent = "+" + m.others;
         el.appendChild(badge);
       }
-      // Hover → show the shared stats tooltip (mounted on the player) directly above YouTube's
-      // scrub-preview; reposition on move so it tracks the preview; hide on leave.
       el.addEventListener("mouseenter", () => showSurgeTip(lead, frac, m.secondary));
-      el.addEventListener("mousemove", () => { if (surgeTipLead) positionSurgeTip(frac); });
+      el.addEventListener("mousemove", () => { if (surgeTipLead) { positionSurgeTip(frac); armSurgeTipIdle(); } });
       el.addEventListener("mouseleave", hideSurgeTip);
       if (SITE.canSeek === false) {
         el.style.cursor = "default";
