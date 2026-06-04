@@ -86,6 +86,22 @@ export class DensityTracker {
 
   reset() { this.buckets.clear(); }
 
+  // Serialize to a compact form for persistence (replay the wave on the VOD). Capped to the most
+  // recent `cap` base buckets so a marathon stream can't grow storage without bound.
+  serialize(cap = 22000) {
+    let entries = [...this.buckets.entries()];
+    if (entries.length > cap) entries = entries.slice(-cap);
+    return { baseRes: this.baseRes, buckets: entries };
+  }
+  // Restore buckets saved by `serialize` (only when the base resolution matches).
+  restore(data) {
+    if (!data || data.baseRes !== this.baseRes || !Array.isArray(data.buckets)) return;
+    for (const [i, w] of data.buckets) {
+      if (Number.isFinite(i) && Number.isFinite(w)) this.buckets.set(i, w);
+    }
+  }
+  get size() { return this.buckets.size; }
+
   // Pick a display resolution (seconds/point) for a stream of `durationSec`. Targets roughly
   // a fixed number of points so a 10 min stream lands near 10 s/point and a 6 h stream near
   // 2 min/point — and is always a whole multiple of the base resolution.

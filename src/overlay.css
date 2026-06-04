@@ -525,16 +525,22 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
   left: 0;
   right: 0;
   bottom: 6px;          /* rise just above the progress bar */
-  height: 32px;         /* ~25% shorter than before */
+  height: 86px;         /* room for the wave band + 3 taller emote lanes (see WAVE_GEO in content.js) */
   pointer-events: none;
   overflow: visible;
-  z-index: 60;
+  /* Above YouTube's storyboard scrub-preview (which lives in the bottom chrome) so our surge
+     tooltip stays readable instead of being covered by it. The layer only spans the 70px strip
+     just above the seekbar, so it never covers the player's controls or menus. */
+  z-index: 1000;
 }
+/* The wave drawing occupies only the BOTTOM band; emote lanes + stems live above it. */
 .meridian-wave-svg {
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 30px;
   width: 100%;
-  height: 100%;
   display: block;
   filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.35));
 }
@@ -556,38 +562,111 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
    These overlays only exist in fullscreen, so this never affects normal/theater layout. */
 #movie_player.meridian-has-wave .ytp-overlay-bottom-right,
 #movie_player.meridian-has-wave .ytp-overlay-bottom-left {
-  transform: translateY(-48px);
+  transform: translateY(-92px);
 }
 
-.meridian-wave-emotes { position: absolute; inset: 0; }
+.meridian-wave-emotes { position: absolute; inset: 0; overflow: visible; }
+
+/* Stem + dot tie each lane-stacked emote to its exact timestamp on the wave crest. */
+.meridian-wave-stem {
+  position: absolute;
+  width: 2px;
+  transform: translateX(-50%);
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.meridian-wave-dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  transform: translate(-50%, 50%);
+  opacity: 0.65;
+  pointer-events: none;
+}
+
 .meridian-wave-emote {
   position: absolute;
-  transform: translate(-50%, 0); /* bottom-anchored so it perches on top of the wave */
+  transform: translate(-50%, 50%); /* bottom = bubble CENTER (lane y) */
   pointer-events: auto;
   cursor: pointer;
   line-height: 0;
+  z-index: 5;
 }
 .meridian-wave-emote img {
-  height: 15px;
-  width: auto;
+  height: 16px;
+  width: auto;             /* preserve the emote's native aspect ratio (no squashing) */
+  max-width: 40px;         /* but cap ultra-wide emotes so columns can't collide */
+  object-fit: contain;
   display: block;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
-  transition: transform 90ms ease;
+  border-radius: 4px;
+  background: rgba(20, 20, 23, 0.6);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8), 0 1px 3px rgba(0, 0, 0, 0.55);
+  transition: transform 120ms cubic-bezier(.2,.6,.2,1), box-shadow 120ms ease;
 }
-.meridian-wave-emote:hover img { transform: scale(1.25); }
-/* Badge perched at the top-right; font kept tiny (≤ YouTube's "HD" quality label) so it's subtle. */
+.meridian-wave-emote:hover { z-index: 50; }
+.meridian-wave-emote:hover img {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 3px rgba(130, 87, 255, 0.3), 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+/* Compact violet "+N" pill — text no larger than YouTube's "HD" quality label. */
 .meridian-wave-badge {
   position: absolute;
-  top: -4px;
-  right: -5px;
+  top: -5px;
+  right: -6px;
   left: auto;
-  background: #9146ff;
+  background: #8257FF;
   color: #fff;
-  font: 700 7px/1 "Inter", system-ui, sans-serif;
-  padding: 1px 2.5px;
+  font: 700 7px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 1px 2px;
   border-radius: 999px;
   pointer-events: none;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  border: 1px solid #0C0C0F;
+}
+
+/* ---- Surge stats tooltip (mounted on the player, positioned inline ABOVE YouTube's preview) ---- */
+.meridian-surge-tip {
+  position: absolute;
+  display: none;
+  transform: translateX(-50%);   /* left/bottom/width set inline to match & sit above the preview */
+  box-sizing: border-box;
+  background: #1B1B20;
+  border: 1px solid #38383F;
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  padding: 9px 10px;
+  z-index: 2147483000;
+  pointer-events: none;
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
+  text-align: left;
+  line-height: 1.25;
+}
+.meridian-surge-tip-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+.meridian-surge-tip-head img { width: 22px; height: 22px; border-radius: 6px; flex: none; background: #232329; object-fit: contain; }
+.meridian-surge-tip-htxt { min-width: 0; }
+.meridian-surge-tip-name { font-size: 12px; font-weight: 600; color: #F5F5F6; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meridian-surge-tip-time { font-size: 10.5px; color: #82828C; font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-top: 1px; }
+.meridian-surge-tip-stats { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.meridian-surge-tip-rate { font-size: 16px; font-weight: 700; color: #F5F5F6; font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1; letter-spacing: -.02em; }
+.meridian-surge-tip-rate span { font-size: 9.5px; color: #82828C; font-weight: 500; margin-left: 2px; }
+.meridian-surge-tip-uniq { font-size: 10.5px; color: #82828C; }
+.meridian-surge-tip-uniq b { color: #C6B0FF; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+/* secondary emotes in a grouped surge — stacked cards in a pill, "+N" beyond the top 3 */
+.meridian-surge-tip-cluster {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 7px 3px 5px; margin-bottom: 7px; border-radius: 999px;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+}
+.meridian-surge-tip-stack { display: inline-flex; }
+.meridian-surge-tip-stack img {
+  width: 17px; height: 17px; border-radius: 5px; object-fit: contain;
+  background: #232329; border: 1.5px solid #16161a;
+}
+.meridian-surge-tip-stack img + img { margin-left: -7px; }
+.meridian-surge-tip-more {
+  font-size: 10px; font-weight: 700; color: #F5F5F6;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; padding-right: 1px;
 }
 
 /* ---- Resume-autoscroll pill (shown inside the messages box when autoscroll is paused) ---- */

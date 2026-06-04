@@ -78,6 +78,8 @@
     highlightAnchorLive: true,   // anchor highlights at the live edge (scroll left) vs. the viewer's seek position
     highlightOffsetSec: 5,       // shift highlights this many sec into the past (human reaction time)
     highlightColor: "#b388ff",   // wave + emote-marker accent color (light purple)
+    highlightPersistEmotes: true,  // keep emote highlights across sessions + replay them on the VOD
+    highlightPersistDensity: true, // keep the intensity-timeline wave + replay it on the VOD
     emote7tv: true,              // 3rd-party emote providers (each toggleable; all on by default)
     emoteBttv: true,
     emoteFfz: true,
@@ -991,7 +993,9 @@
       const loadOnChanged = next.ytLoadOn !== prefs.ytLoadOn;
       const prevMode = effectiveMode();
       const highlightChanged = next.highlightEnabled !== prefs.highlightEnabled
-        || next.highlightTimeline !== prefs.highlightTimeline;
+        || next.highlightTimeline !== prefs.highlightTimeline
+        || next.highlightPersistEmotes !== prefs.highlightPersistEmotes
+        || next.highlightPersistDensity !== prefs.highlightPersistDensity;
       const colorChanged = next.highlightColor !== prefs.highlightColor;
       prefs = next;
       const modeChanged = effectiveMode() !== prevMode;
@@ -1183,6 +1187,8 @@
   }
   let highlightsKey = "";
   let saveHlTimer = null;
+  let densityKey = "";
+  let saveDensityTimer = null;
   // Refreshed by the 2 s render loop so the per-message hot path needs no DOM access.
   let densityArmed = false;
   let atLiveCached = true; // whether playback is at/near the live edge (refreshed by the 2 s loop)
@@ -1205,8 +1211,18 @@
     const v = SITE.getVideo?.();
     return !!(v && v.duration === Infinity);
   }
-  // The wave only makes sense on a live stream with a seekable DVR window (YouTube).
-  function waveActive() { return SITE.hasTimeline && prefs.highlightTimeline && isLiveStream(); }
+  // The wave is shown either LIVE (recording in real time) or in REPLAY on the finished VOD — a
+  // YouTube livestream keeps the same `watch?v=<id>` URL after it ends, so we re-key the persisted
+  // wave/markers by that videoId and replay them on the archive. `replayLoaded` is set by
+  // loadHighlights once persisted data for a non-live video has been read in.
+  let replayLoaded = false;
+  function waveActive() {
+    if (!(SITE.hasTimeline && prefs.highlightTimeline)) return false;
+    return isLiveStream() || replayLoaded;
+  }
+  // We only RECORD while genuinely live (on a VOD the IRC carries the channel's *current* chat,
+  // which must never be written into the archived timeline).
+  function recordingActive() { return waveActive() && isLiveStream(); }
   function emoteHighlightsActive() { return waveActive() && prefs.highlightEnabled; }
 
   function videoSeekable() {
@@ -1416,6 +1432,127 @@
     return Math.min(1, (p?.v || 0) / (densityPeak || 1));
   }
 
+  // Geometry of the lane-stacked emote markers, mirrored in overlay.css (.meridian-wave-layer
+  // is WAVE_GEO.layer tall; the wave SVG occupies the bottom WAVE_GEO.band px). Emote markers
+  // never move horizontally (that would lie about the timestamp) — when two surges are too close
+  // they bump UP a lane, and a stem + dot ties each one to its exact moment on the wave crest.
+  // lane = bubble-center px from the layer bottom. Lanes are spaced > bubble so stacked markers
+  // don't overlap (legible). The stats tooltip is mounted on the player and positions itself.
+  const WAVE_GEO = { layer: 86, band: 30, bubble: 16, lanes: [40, 58, 76] };
+
+  // Format a stream-time offset (seconds from stream start) as h:mm:ss / m:ss.
+  function fmtStreamTime(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+  // --- Surge hover tooltip ---------------------------------------------------------------------
+  // A single shared tooltip mounted on the PLAYER (not nested in the seekbar) so it escapes
+  // YouTube's chrome stacking context and always sits in front of — and directly above — YouTube's
+  // own scrub-preview thumbnail, matched to that preview's width. Shown on emote hover.
+  let surgeTip = null, surgeTipLead = null;
+  function ensureSurgeTip() {
+    const player = SITE.findPlayer?.();
+    if (!player) return null;
+    if (surgeTip && surgeTip.parentElement === player) return surgeTip;
+    if (surgeTip) surgeTip.remove();
+    surgeTip = document.createElement("div");
+    surgeTip.className = "meridian-surge-tip";
+    player.appendChild(surgeTip);
+    return surgeTip;
+  }
+  // YouTube's currently-visible scrubber tooltip (storyboard frame + timestamp), if any.
+  function ytPreviewEl() {
+    const player = SITE.findPlayer?.();
+    if (!player) return null;
+    for (const el of player.querySelectorAll(".ytp-tooltip")) {
+      if (el.offsetWidth > 0 && el.offsetHeight > 0) return el;
+    }
+    return null;
+  }
+  function buildSurgeTipContent(lead, frac, secondary) {
+    // msgs/min reads bigger (and more intuitively "intense") than msgs/sec — peak density is a
+    // per-second rate, so ×60.
+    const rate = Math.round(waveHeightAtFrac(frac) * (densityPeak || 1) * 60);
+    const time = fmtStreamTime(highlightVt(lead));
+    const tip = surgeTip;
+    tip.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "meridian-surge-tip-head";
+    const thumb = document.createElement("img");
+    thumb.src = lead.url; thumb.alt = "";
+    const ht = document.createElement("div");
+    ht.className = "meridian-surge-tip-htxt";
+    const nm = document.createElement("div"); nm.className = "meridian-surge-tip-name";
+    nm.textContent = lead.name;
+    const tm = document.createElement("div"); tm.className = "meridian-surge-tip-time"; tm.textContent = time;
+    ht.append(nm, tm);
+    head.append(thumb, ht);
+    tip.append(head);
+    // Secondary emotes in this group → a stacked-card pill of the top 3, with "+N" beyond that.
+    if (secondary && secondary.length) {
+      const pill = document.createElement("div");
+      pill.className = "meridian-surge-tip-cluster";
+      const stack = document.createElement("span");
+      stack.className = "meridian-surge-tip-stack";
+      for (const rec of secondary.slice(0, 3)) {
+        const im = document.createElement("img");
+        im.src = rec.url; im.alt = rec.name; im.loading = "lazy";
+        stack.appendChild(im);
+      }
+      pill.appendChild(stack);
+      const extra = secondary.length - 3;
+      if (extra > 0) {
+        const more = document.createElement("span");
+        more.className = "meridian-surge-tip-more";
+        more.textContent = "+" + extra;
+        pill.appendChild(more);
+      }
+      tip.appendChild(pill);
+    }
+    const stats = document.createElement("div");
+    stats.className = "meridian-surge-tip-stats";
+    stats.innerHTML = `<div class="meridian-surge-tip-rate">${rate}<span>msg/min</span></div>` +
+      `<div class="meridian-surge-tip-uniq"><b>${lead.count || 0}</b> spamming</div>`;
+    tip.append(stats);
+  }
+  // Position the shared tooltip directly above YouTube's preview, matched to its width; if the
+  // preview isn't up, fall back to floating above the seekbar at the marker's x.
+  function positionSurgeTip(frac) {
+    const tip = surgeTip, player = SITE.findPlayer?.();
+    if (!tip || !player) return;
+    const pr = player.getBoundingClientRect();
+    const prev = ytPreviewEl();
+    let leftPx, bottomPx, widthPx;
+    if (prev) {
+      const r = prev.getBoundingClientRect();
+      widthPx = r.width;
+      leftPx = r.left - pr.left + r.width / 2;
+      bottomPx = pr.bottom - r.top + 8;            // perch just above the preview
+    } else {
+      const sb = SITE.findSeekbar?.();
+      const sr = sb && sb.getBoundingClientRect();
+      widthPx = 168;
+      leftPx = sr ? (sr.left - pr.left + frac * sr.width) : pr.width * frac;
+      bottomPx = (sr ? pr.bottom - sr.top : 0) + 100;
+    }
+    // Keep the tooltip within the player horizontally.
+    const half = widthPx / 2;
+    leftPx = Math.max(half + 4, Math.min(pr.width - half - 4, leftPx));
+    tip.style.width = widthPx + "px";
+    tip.style.left = leftPx + "px";
+    tip.style.bottom = bottomPx + "px";
+  }
+  function showSurgeTip(lead, frac, secondary) {
+    if (!ensureSurgeTip()) return;
+    surgeTipLead = { lead, frac, secondary };
+    buildSurgeTipContent(lead, frac, secondary);
+    positionSurgeTip(frac);
+    surgeTip.style.display = "block";
+  }
+  function hideSurgeTip() { surgeTipLead = null; if (surgeTip) surgeTip.style.display = "none"; }
+
   function renderEmotes() {
     if (!waveLayer) return;
     const box = waveLayer.querySelector(".meridian-wave-emotes");
@@ -1428,49 +1565,105 @@
     }
     recs.sort((a, b) => a.frac - b.frac);
     const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
-    // Gap is the larger of: no-pixel-overlap, and 1/50 (so total clusters can't exceed ~51).
-    // Raising the gap is exactly the "group when >50 emotes" behaviour from the spec.
-    const gap = Math.max(22 / barW, 1 / 50);
-    const clusters = [];
+    const NLANES = WAVE_GEO.lanes.length;
+    const spanSec = Math.max(1, s.end - s.start); // timeline span the seekbar shows, in seconds
+
+    // mepl = "minutes elapsed per length": how many minutes the timeline advances across one
+    // generic emote-width. Two surges closer than mepl in time would visually overlap, so we GROUP
+    // them; surges farther apart than mepl are shown separately. Expressed as a fraction of the bar
+    // it's just (emoteWidth / barWidth), which keeps grouping resolution-independent (a 10 min
+    // stream and a 6 h stream both group "emotes that would touch").
+    const EMOTE_W = WAVE_GEO.bubble + 6;                 // generic emote footprint incl. ring/spacing
+    const meplFrac = EMOTE_W / barW;                     // mepl as a fraction of the bar (= EMOTE_W px)
+    const meplMin = (spanSec / 60) * meplFrac;           // the named quantity, in minutes
+    // Group only when surges are within HALF an mepl: that tight, even different emotes would sit
+    // right on top of each other, so they collapse to one marker + "+N". Between 0.5·mepl and mepl
+    // there's room to bump the second emote up a lane (Stage 2) instead of hiding it.
+    const groupGapFrac = 0.5 * meplFrac;
+
+    // Stage 1 — GROUP (< 0.5·mepl): collapse each run into one marker = the strongest emote + a
+    // "+N" pill counting the OTHER distinct emotes in the group.
+    const groups = [];
     for (const item of recs) {
-      const last = clusters[clusters.length - 1];
-      if (last && item.frac - last.startFrac <= gap) {
-        last.items.push(item);
-      } else {
-        clusters.push({ startFrac: item.frac, items: [item] });
-      }
+      const g = groups[groups.length - 1];
+      if (g && item.frac - g.lastFrac <= groupGapFrac) { g.items.push(item); g.lastFrac = item.frac; }
+      else groups.push({ items: [item], lastFrac: item.frac });
     }
+    const markers = groups.map((g) => {
+      const byName = new Map();
+      for (const it of g.items) {
+        const ex = byName.get(it.rec.name);
+        if (!ex || (it.rec.count || 0) > (ex.rec.count || 0)) byName.set(it.rec.name, it);
+      }
+      const distinct = [...byName.values()].sort((a, b) => (b.rec.count || 0) - (a.rec.count || 0));
+      // The strongest emote leads the marker; the rest become the "+N" badge + the tooltip's
+      // stacked secondary-emote pill.
+      return {
+        lead: distinct[0].rec, frac: distinct[0].frac,
+        others: distinct.length - 1, secondary: distinct.slice(1).map((d) => d.rec),
+      };
+    });
+
+    // Stage 2 — LANES: separate markers still within ~mepl of each other (their bubbles would
+    // touch) get bumped UP a lane (lanes are spaced taller than a bubble, so they stay legible).
+    // Markers with room sit on lane 0, right on the wave.
+    const laneGapFrac = meplFrac;
+    const laneTail = new Array(NLANES).fill(null); // last frac placed per lane
+    for (const m of markers) {
+      let lane = NLANES - 1; // fall back to the top lane if everything is occupied
+      for (let l = 0; l < NLANES; l++) {
+        const t = laneTail[l];
+        if (t === null || m.frac - t >= laneGapFrac) { lane = l; break; }
+      }
+      m.lane = lane;
+      laneTail[lane] = m.frac;
+    }
+
+    const accent = waveColor();
     const frag = document.createDocumentFragment();
-    for (const c of clusters) {
-      // Anchor the whole cluster to its LEADER = the emote with the most unique viewers, so the
-      // marker's position, its image, and its click-seek all point at the leader's timestamp (the
-      // strongest surge in the group). Ties fall to the earliest (left-most) item.
-      let leadItem = c.items[0];
-      for (const it of c.items) if ((it.rec.count || 0) > (leadItem.rec.count || 0)) leadItem = it;
-      const lead = leadItem.rec;
-      const frac = leadItem.frac;
-      // "+N" counts the OTHER distinct emotes grouped here (repeat surges of one emote collapse).
-      const hidden = new Set(c.items.map((x) => x.rec.name)).size - 1;
+    for (const m of markers) {
+      const lead = m.lead, frac = m.frac, laneY = WAVE_GEO.lanes[m.lane];
+      const leftPct = (frac * 100) + "%";
+      const crestPx = Math.max(2, waveHeightAtFrac(frac) * WAVE_GEO.band);
+
+      // Stem + dot tie this marker to its exact moment on the wave crest.
+      const stem = document.createElement("div");
+      stem.className = "meridian-wave-stem";
+      stem.style.left = leftPct;
+      stem.style.bottom = crestPx + "px";
+      stem.style.height = Math.max(0, (laneY - WAVE_GEO.bubble / 2) - crestPx) + "px";
+      stem.style.background = `linear-gradient(${accent}, transparent)`;
+      const dot = document.createElement("div");
+      dot.className = "meridian-wave-dot";
+      dot.style.left = leftPct;
+      dot.style.bottom = crestPx + "px";
+      dot.style.background = accent;
+      frag.append(stem, dot);
+
       const el = document.createElement("div");
       el.className = "meridian-wave-emote";
-      el.style.left = (frac * 100) + "%";
-      el.style.bottom = (waveHeightAtFrac(frac) * 88 + 8) + "%"; // perched just above the wave
+      el.style.left = leftPct;
+      el.style.bottom = laneY + "px";
       const img = document.createElement("img");
       img.src = lead.url; img.alt = lead.name; img.loading = "lazy";
       el.appendChild(img);
-      if (hidden > 0) {
+      if (m.others > 0) {
         const badge = document.createElement("span");
         badge.className = "meridian-wave-badge";
-        badge.textContent = "+" + hidden;
+        badge.textContent = "+" + m.others;
         el.appendChild(badge);
       }
-      el.title = `${lead.name} ×${lead.count}` + (hidden > 0 ? ` · +${hidden} more emote${hidden === 1 ? "" : "s"}` : "");
+      // Hover → show the shared stats tooltip (mounted on the player) directly above YouTube's
+      // scrub-preview; reposition on move so it tracks the preview; hide on leave.
+      el.addEventListener("mouseenter", () => showSurgeTip(lead, frac, m.secondary));
+      el.addEventListener("mousemove", () => { if (surgeTipLead) positionSurgeTip(frac); });
+      el.addEventListener("mouseleave", hideSurgeTip);
       if (SITE.canSeek === false) {
         el.style.cursor = "default";
       } else {
         el.addEventListener("click", (e) => {
           e.stopPropagation(); e.preventDefault();
-          seekTo(highlightVt(lead)); // seek to the first emote's timestamp — matches its position
+          seekTo(highlightVt(lead));
         });
         el.addEventListener("mousedown", (e) => e.stopPropagation());
       }
@@ -1490,33 +1683,64 @@
   }
   async function saveHighlights() {
     saveHlTimer = null;
-    if (!highlightsKey) return;
+    if (!highlightsKey || !prefs.highlightPersistEmotes) return;
     const arr = [...highlights.values()]
       .map(({ key, name, url, count, threshold, wallTs, vt, behindLive }) => ({ key, name, url, count, threshold, wallTs, vt, behindLive }))
       .slice(-HIGHLIGHT_CAP);
     try { await chrome.storage.local.set({ [highlightsKey]: arr }); } catch {}
   }
+  // Density wave persistence (replay the intensity timeline on the VOD). Keyed off the same videoId.
+  function densityStorageKey() {
+    const vid = SITE.videoId?.() || lastJoined || HOST;
+    return `meridian.density.${HOST}.${vid}`;
+  }
+  function scheduleSaveDensity() {
+    if (saveDensityTimer || !prefs.highlightPersistDensity) return;
+    saveDensityTimer = setTimeout(saveDensity, 4000);
+  }
+  async function saveDensity() {
+    saveDensityTimer = null;
+    if (!densityKey || !prefs.highlightPersistDensity || !density.size) return;
+    try { await chrome.storage.local.set({ [densityKey]: density.serialize() }); } catch {}
+  }
   async function loadHighlights() {
     const key = hlStorageKey();
     if (key === highlightsKey) return;
     highlightsKey = key;
+    densityKey = densityStorageKey();
     highlights.clear();
     hlEngine.reset();
     // New stream/video — drop the previous stream's density wave so nothing carries over
     // (a channel can run several livestreams; each has a distinct videoId/key).
     density.reset();
-    if (!waveActive()) return;
+    replayLoaded = false;
+    const live = isLiveStream();
+    // Bail only when the wave is entirely off (timeline pref or unsupported site). On a VOD we must
+    // still read storage to discover whether there's an archived timeline to replay.
+    if (!(SITE.hasTimeline && prefs.highlightTimeline)) return;
     try {
-      const o = await chrome.storage.local.get(key);
-      for (const rec of o[key] || []) highlights.set(rec.key, rec);
+      const wantEmotes = prefs.highlightPersistEmotes, wantDensity = prefs.highlightPersistDensity;
+      const o = await chrome.storage.local.get([
+        ...(wantEmotes ? [key] : []),
+        ...(wantDensity ? [densityKey] : []),
+      ]);
+      if (wantEmotes) for (const rec of o[key] || []) highlights.set(rec.key, rec);
+      if (wantDensity && o[densityKey]) { density.restore(o[densityKey]); lastResAt = 0; lastPeakAt = 0; }
     } catch {}
+    // On a finished VOD, flip on replay if anything was restored, so waveActive() turns true and the
+    // 2 s loop starts drawing the archived wave/markers.
+    if (!live) replayLoaded = (density.size > 0 || highlights.size > 0);
     renderEmotes();
   }
 
   // Called when the highlight prefs change (toggle on/off).
   function refreshHighlightState() {
-    if (waveActive()) { highlightsKey = ""; lastResAt = 0; lastPeakAt = 0; loadHighlights(); }
-    else {
+    highlightsKey = ""; densityKey = ""; lastResAt = 0; lastPeakAt = 0;
+    if (SITE.hasTimeline && prefs.highlightTimeline) {
+      loadHighlights();
+    } else {
+      // Wave turned off entirely — tear down immediately.
+      replayLoaded = false;
       if (waveLayer) waveLayer.style.display = "none";
       highlights.clear(); hlEngine.reset(); density.reset();
     }
@@ -1528,16 +1752,27 @@
   // channel-logo / like-dislike overlays clear of the wave + emotes.
   function markWaveOnPlayer(show) { SITE.findPlayer?.()?.classList.toggle("meridian-has-wave", !!show); }
   setInterval(() => {
-    densityArmed = waveActive();
-    if (!densityArmed) { if (waveLayer) waveLayer.style.display = "none"; markWaveOnPlayer(false); return; }
+    // `densityArmed` gates the per-message RECORDING hot path (live only); the wave can still be
+    // DISPLAYED in replay on a finished VOD.
+    densityArmed = recordingActive();
+    // Pick up video changes even while the wave is currently off — this is what lets a finished
+    // livestream's VOD flip into replay (loadHighlights reads storage and sets `replayLoaded`).
+    if (SITE.hasTimeline && prefs.highlightTimeline && hlStorageKey() !== highlightsKey) loadHighlights();
+    // Stream ended while watching (live → VOD, same videoId): keep showing what we already recorded.
+    if (!isLiveStream() && !replayLoaded && (density.size > 0 || highlights.size > 0)) replayLoaded = true;
+    if (!waveActive()) { if (waveLayer) waveLayer.style.display = "none"; markWaveOnPlayer(false); return; }
     const s = videoSeekable();
     if (!s) { markWaveOnPlayer(false); return; }
     atLiveCached = atLiveEdge(s); // gates the per-message recording hot path
     liveEdgeVt = s.end; liveEdgeAt = Date.now(); // sample the seekbar live edge for the hot path
-    if (hlStorageKey() !== highlightsKey) loadHighlights();
     const now = Date.now();
-    // Keep density bounded: drop buckets older than the stream-time window we could ever render.
-    density.pruneBefore(s.end - Math.max(waveWindow(s), 600) - highlightOffset());
+    // Keep density bounded. While recording with persistence on we keep (almost) the whole stream
+    // so it can be replayed on the VOD; otherwise just the renderable window.
+    if (densityArmed) {
+      const keepSec = prefs.highlightPersistDensity ? 12 * 3600 : Math.max(waveWindow(s), 600) + highlightOffset();
+      density.pruneBefore(s.end - keepSec);
+      scheduleSaveDensity();
+    }
     recomputeResIfDue(now, s);
     recomputePeakIfDue(now, s);
     // No seekbar right now (e.g. Kick controls hidden) → render nothing, so the wave + emotes

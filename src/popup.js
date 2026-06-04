@@ -97,6 +97,7 @@ const defaults = {
   sites: {},
   highlightTimeline: true, highlightEnabled: true, highlightThreshold: 5, highlightAnchorLive: true,
   highlightOffsetSec: 5, highlightColor: "#b388ff",
+  highlightPersistEmotes: true, highlightPersistDensity: true,
   emote7tv: true, emoteBttv: true, emoteFfz: true,
   textStyle: "shadow", boldText: true,
   ytLoadOn: "live"
@@ -160,6 +161,8 @@ async function loadAllFields() {
   $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
   $("#highlightColor").value = p.highlightColor || "#b388ff";
   $("#highlightColorAppearance").value = p.highlightColor || "#b388ff";
+  $("#highlightPersistEmotes").checked = p.highlightPersistEmotes !== false;
+  $("#highlightPersistDensity").checked = p.highlightPersistDensity !== false;
   $("#emote7tv").checked = p.emote7tv !== false;
   $("#emoteBttv").checked = p.emoteBttv !== false;
   $("#emoteFfz").checked = p.emoteFfz !== false;
@@ -169,7 +172,7 @@ async function loadAllFields() {
 }
 // Emote highlights only make sense when the wave is on.
 function syncHighlightGating(timelineOn) {
-  for (const sel of ["#highlightEnabled", "#highlightAnchorLive"]) {
+  for (const sel of ["#highlightEnabled", "#highlightAnchorLive", "#highlightPersistEmotes", "#highlightPersistDensity"]) {
     const dep = $(sel);
     dep.disabled = !timelineOn;
     dep.closest("label").style.opacity = timelineOn ? "" : "0.5";
@@ -270,6 +273,8 @@ $("#highlightTimeline").addEventListener("change", async (e) => {
 });
 $("#highlightEnabled").addEventListener("change", async (e) => { await setPrefs({ highlightEnabled: e.target.checked }); });
 $("#highlightAnchorLive").addEventListener("change", async (e) => { await setPrefs({ highlightAnchorLive: e.target.checked }); });
+$("#highlightPersistEmotes").addEventListener("change", async (e) => { await setPrefs({ highlightPersistEmotes: e.target.checked }); });
+$("#highlightPersistDensity").addEventListener("change", async (e) => { await setPrefs({ highlightPersistDensity: e.target.checked }); });
 $("#highlightColor").addEventListener("input", async (e) => {
   $("#highlightColorAppearance").value = e.target.value;
   await setPrefs({ highlightColor: e.target.value });
@@ -295,7 +300,7 @@ $("#emoteBttv").addEventListener("change", async (e) => { await setPrefs({ emote
 $("#emoteFfz").addEventListener("change", async (e) => { await setPrefs({ emoteFfz: e.target.checked }); });
 $("#clearHighlightCache").addEventListener("click", async () => {
   const all = await chrome.storage.local.get(null);
-  const keys = Object.keys(all).filter((k) => k.startsWith("meridian.highlights."));
+  const keys = Object.keys(all).filter((k) => k.startsWith("meridian.highlights.") || k.startsWith("meridian.density."));
   if (keys.length) await chrome.storage.local.remove(keys);
   const msg = $("#clearHighlightMsg");
   msg.textContent = `Cleared ${keys.length} cached timeline${keys.length === 1 ? "" : "s"} ✓`;

@@ -25,12 +25,10 @@
 
   <!-- General -->
   <section class="panel" data-tab="general">
-    <div id="status" class="card"></div>
-    <div class="card" title="Connect your Twitch account to send messages. Anonymous read only until connected">
-      <div class="row">
-        <button id="connectTwitch">Connect Twitch</button>
-        <button id="disconnectTwitch" class="secondary">Disconnect</button>
-      </div>
+    <div class="card conncard" title="Connect your Twitch account to send messages. Anonymous read only until connected">
+      <div id="status"></div>
+      <button id="connectTwitch">Connect</button>
+      <button id="disconnectTwitch" class="secondary">Disconnect</button>
       <div class="hint" id="authMsg"></div>
       <div class="hint" id="redirectHelp"></div>
     </div>
@@ -114,6 +112,14 @@ xqc = xqc"></textarea>
       <label class="row" title="Color of the activity wave and emote markers">
         <span>Timeline color</span>
         <input id="highlightColor" type="color" />
+      </label>
+      <label class="row" title="Keep emote surge markers for this video and replay them on the VOD after the stream ends (matched by the video's URL)">
+        <span>Retain emote highlights</span>
+        <input id="highlightPersistEmotes" type="checkbox" />
+      </label>
+      <label class="row" title="Keep the chat-intensity wave for this video and replay it on the VOD after the stream ends (matched by the video's URL)">
+        <span>Retain intensity timeline</span>
+        <input id="highlightPersistDensity" type="checkbox" />
       </label>
       <div class="row">
         <button id="clearHighlightCache" class="secondary">Clear highlight cache</button>
