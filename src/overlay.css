@@ -635,7 +635,7 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
    These overlays only exist in fullscreen, so this never affects normal/theater layout. */
 #movie_player.meridian-has-wave .ytp-overlay-bottom-right,
 #movie_player.meridian-has-wave .ytp-overlay-bottom-left {
-  transform: translateY(-92px);
+  transform: translateY(-52px);
 }
 
 .meridian-wave-emotes { position: absolute; inset: 0; overflow: visible; }
