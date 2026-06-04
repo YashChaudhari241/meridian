@@ -126,6 +126,7 @@
   flex: 1;
   display: flex;
   align-items: center;
+  position: relative;
   background: rgba(255,255,255,0.05);
   border: 1px solid #38383F;
   border-radius: 6px;
@@ -133,12 +134,13 @@
      inset before the first glyph (≈ the gap between the delay's "−" and its left edge). */
   box-sizing: border-box;
   height: 20px;
-  padding: 0 5px;
+  padding: 0 22px 0 5px;  /* right padding for the heart icon */
   min-width: 0;
   /* The prefix + name scroll together: when the channel name overflows, `twitch.tv/` slides off
      to the left instead of permanently occupying space. Scrollbar hidden. */
   overflow-x: auto;
   scrollbar-width: none;
+  white-space: nowrap;
 }
 .meridian-channel-field::-webkit-scrollbar { display: none; }
 .meridian-channel-prefix {
@@ -166,39 +168,27 @@
   white-space: nowrap;
 }
 .meridian-channel:focus { color: #fff; }
-.meridian-channel-reset {
-  background: transparent;
-  border: none;
-  color: #82828C;
-  cursor: pointer;
-  flex: none;
-  width: 18px; height: 18px;
-  border-radius: 5px;
-  font-size: 11px;
-  padding: 0;
-  line-height: 1;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.meridian-channel-reset:hover { color: #fff; background: rgba(255,255,255,0.08); }
-.meridian-channel-reset[hidden] { display: none; }
 
-/* Follow heart (signed-in only) — sits where the reset icon would, opens twitch.tv to follow. */
+/* Follow heart (signed-in only) — pinned to right inner edge of the channel field. */
 .meridian-channel-follow {
+  position: absolute;
+  right: 3px;
   background: transparent;
   border: none;
-  color: #5C5C65;
+  color: #B4B4BC;
   cursor: pointer;
-  width: 18px; height: 18px;
+  width: 15px; height: 15px;
   border-radius: 5px;
   line-height: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
+  padding: 0;
   transition: background 130ms cubic-bezier(.2,.6,.2,1), color 130ms cubic-bezier(.2,.6,.2,1);
 }
-.meridian-channel-follow svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; display: block; }
-.meridian-channel-follow:hover { color: #8257FF; background: rgba(130,87,255,0.16); }
+.meridian-channel-follow svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2; display: block; }
+.meridian-channel-follow:hover { color: #F5F5F6; background: rgba(255,255,255,0.08); }
 .meridian-channel-follow[hidden] { display: none; }
 
 .meridian-delay {

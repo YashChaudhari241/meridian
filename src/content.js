@@ -311,8 +311,7 @@
           <span class="meridian-channel-prefix">twitch.tv/</span>
           <input class="meridian-channel" placeholder="channel name" spellcheck="false" />
         </span>
-        <button class="meridian-channel-reset" data-act="auto" title="Reset to auto channel" hidden>⟲</button>
-        <button class="meridian-channel-follow" data-act="follow" title="Follow on Twitch" hidden><svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
+        <button class="meridian-channel-follow" data-act="follow" title="Follow on Twitch" hidden><svg viewBox="0 0 24 24" width="10" height="10"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
       </span>
       <div class="meridian-delay" title="Chat delay (seconds)">
         <span class="meridian-delay-icon">⏱</span>
@@ -348,7 +347,6 @@
   const els = {
     header: root.querySelector(".meridian-header"),
     channel: root.querySelector(".meridian-channel"),
-    channelReset: root.querySelector(".meridian-channel-reset"),
     follow: root.querySelector(".meridian-channel-follow"),
     delayVal: root.querySelector(".meridian-delay-val"),
     status: root.querySelector(".meridian-status"),
@@ -451,15 +449,6 @@
     e.stopPropagation();
     reconnect();
   });
-  els.channelReset.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    if (!prefs.overrideChannel) return;
-    prefs.overrideChannel = "";
-    await savePrefs();
-    updateChannelInputFromPrefs();
-    syncChannel();
-  });
   // Heart (signed-in only): opens the channel on twitch.tv in a new tab, where the user can
   // follow/unfollow. (Twitch removed the programmatic follow API in 2021.)
   els.follow.addEventListener("click", (e) => {
@@ -487,7 +476,7 @@
   // --- channel input (twitch.tv/<channel> with × reset; auto-fills from mapping) ---
   // keydown handled in the document-level capture listener (search "isOurInput").
   els.channel.addEventListener("blur", commitChannelInput);
-  els.channel.addEventListener("input", updateResetVisibility);
+  els.channel.addEventListener("input", updateHeart);
   // Rest scrolled to the LEFT (showing `twitch.tv/` + the start of the name) by default and whenever
   // the field loses focus. While focused/typing the browser keeps the caret in view natively.
   function scrollChannelToStart() {
@@ -523,20 +512,10 @@
     scrollChannelToStart();
   }
   function isSignedIn() { return currentAuth?.kind === "oauth"; }
-  // The heart (signed-in only) takes the reset icon's spot. Reset still works when signed out.
   function updateChannelControls() {
-    const ch = resolveChannel();
-    const showHeart = isSignedIn() && !!ch;
+    const showHeart = isSignedIn();
     els.follow.hidden = !showHeart;
-    updateResetVisibility(showHeart);
     updateHeart();
-  }
-  function updateResetVisibility(suppress) {
-    if (suppress) { els.channelReset.hidden = true; return; }
-    const cur = els.channel.value.trim().toLowerCase();
-    const auto = autoChannel();
-    const isOverride = cur && cur !== auto;
-    els.channelReset.hidden = !isOverride && !prefs.overrideChannel;
   }
   function updateHeart() {
     const ch = resolveChannel();
