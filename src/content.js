@@ -93,7 +93,8 @@
     emoteFfz: true,
     textStyle: "shadow",         // chat text legibility: "none" | "shadow" | "outline"
     boldText: true,              // message body weight (names are always one step heavier)
-    ytLoadOn: "live"             // YouTube: load chat on "live" (livestreams only) | "all" (any video)
+    ytLoadOn: "live",            // YouTube: load chat on "live" (livestreams only) | "all" (any video)
+    showViewers: false           // show the channel's live Twitch viewer count (OAuth only; polled ~90s)
   };
 
   // Chatters for @-mention autocomplete (lcLogin → displayName). Seeded from the IRC
@@ -342,6 +343,10 @@
       <span class="meridian-banner-text"></span>
       <span class="meridian-banner-shimmer"></span>
     </div>
+    <div class="meridian-viewers" title="Live viewers on Twitch">
+      <svg class="meridian-viewers-eye" viewBox="0 0 24 24" width="11" height="11" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span class="meridian-viewers-count"></span>
+    </div>
     <div class="meridian-messages"></div>
     <button class="meridian-resume" title="Resume autoscroll"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><polygon points="6 4 20 12 6 20"></polygon></svg>Autoscroll</button>
     <div class="meridian-suggest"></div>
@@ -372,6 +377,8 @@
     delayBannerText: root.querySelector(".meridian-delay-banner .meridian-banner-text"),
     connBanner: root.querySelector(".meridian-conn-banner"),
     connBannerText: root.querySelector(".meridian-conn-banner .meridian-banner-text"),
+    viewers: root.querySelector(".meridian-viewers"),
+    viewersCount: root.querySelector(".meridian-viewers-count"),
     messages: root.querySelector(".meridian-messages"),
     input: root.querySelector(".meridian-input"),
     send: root.querySelector(".meridian-send"),
@@ -1010,6 +1017,38 @@
     if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
     delayPrimed = false;          // re-arm the buffering indicator for the next connection
     updateDelayBanner();
+    stopViewerPoll(); setViewers(null);
+  }
+
+  // --- live Twitch viewer count (OAuth only, opt-in) ---
+  let viewerTimer = null;
+  function viewersEnabled() { return prefs.showViewers === true && currentAuth?.kind === "oauth"; }
+  function formatViewers(n) {
+    if (n == null) return "";
+    if (n < 1000) return String(n);          // 1 decimal place once past 1000 (24800 → "24.8K")
+    if (n < 1e6) return (n / 1e3).toFixed(1) + "K";
+    return (n / 1e6).toFixed(1) + "M";
+  }
+  function setViewers(n) {
+    if (n == null) { els.viewers.classList.remove("show"); return; }
+    els.viewersCount.textContent = formatViewers(n);
+    els.viewers.classList.add("show");
+  }
+  async function fetchViewers() {
+    if (!viewersEnabled() || !lastJoined) { setViewers(null); return; }
+    if (!chrome.runtime?.id) { stopViewerPoll(); return; } // content script orphaned by an extension reload
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "STREAM_INFO", login: lastJoined });
+      if (!viewersEnabled()) return;                  // toggled off mid-flight
+      setViewers(r?.ok && r.live ? r.viewers : null); // hide when offline / failed
+    } catch { setViewers(null); }
+  }
+  function stopViewerPoll() { if (viewerTimer) { clearInterval(viewerTimer); viewerTimer = null; } }
+  function startViewerPoll() {
+    stopViewerPoll();
+    if (!viewersEnabled()) { setViewers(null); return; }
+    fetchViewers();                                   // immediate, then every 90 s
+    viewerTimer = setInterval(fetchViewers, 90000);
   }
 
   let lastJoined = "";
@@ -1021,6 +1060,7 @@
       lastJoined = target;
       chatters.clear(); // reset suggestions for the new channel (NAMES will reseed)
       queue.length = 0; delayPrimed = false; updateDelayBanner(); // re-arm buffering for the new channel
+      setViewers(null); startViewerPoll();            // refetch viewer count for the new channel
       emoteReg?.loadForChannel(target).catch(() => {});
       // Expose the active channel so the popup can show per-channel settings.
       prefs._activeChannel = target;
@@ -1077,8 +1117,10 @@
         || next.highlightPersistEmotes !== prefs.highlightPersistEmotes
         || next.highlightPersistDensity !== prefs.highlightPersistDensity;
       const colorChanged = next.highlightColor !== prefs.highlightColor;
+      const viewersChanged = next.showViewers !== prefs.showViewers;
       prefs = next;
       const modeChanged = effectiveMode() !== prevMode;
+      if (viewersChanged) startViewerPoll(); // start polling, or stop + hide when turned off
       if (channelInputsChanged) { syncChannel(); updateChannelInputFromPrefs(); }
       if (appearanceChanged) applyAppearance();
       if (delayChanged) { applyDelayDisplay(); flushQueue(); }
@@ -1093,6 +1135,7 @@
 
   // --- YouTube handle detection ---
   function refreshDetectedHandle() {
+    if (!chrome.runtime?.id) return; // content script orphaned by an extension reload — go quiet
     // Mount/unmount as the SPA navigates between video pages and the feed.
     syncPageActive();
     if (!pageActive) return;
@@ -1162,12 +1205,24 @@
     if (effectiveMode() === "hidden") setSiteMode(siteMode()).then(reveal);
     else reveal();
   }
+  // Blur the input and (in overlay mode) collapse the bars — same end state as Esc / the idle timer.
+  function unfocusChatInput() {
+    closeSuggest();
+    els.input.blur();
+    root.classList.add("meridian-idle");
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  }
   document.addEventListener("keydown", (e) => {
-    if (isOurInput(e.target)) return;
+    // comboFromEvent requires a modifier, so plain typing in our input never reaches a hotkey.
     const combo = comboFromEvent(e);
     if (!combo) return;
     if (prefs.hotkeyToggle && combo === prefs.hotkeyToggle) { e.preventDefault(); toggleVisibility(); }
-    else if (prefs.hotkeyFocus && combo === prefs.hotkeyFocus) { e.preventDefault(); focusChatInput(); }
+    else if (prefs.hotkeyFocus && combo === prefs.hotkeyFocus) {
+      e.preventDefault();
+      // Pressing the focus hotkey while the input is already focused toggles back off.
+      if (document.activeElement === els.input) unfocusChatInput();
+      else focusChatInput();
+    }
   }, true);
 
   // --- inactivity → hide bars after 10s, blur input but keep typed text ---
@@ -1208,6 +1263,42 @@
     // else: input is still focused → keep timer running so it can blur after 10 s
   });
 
+  // --- emote name/provider tooltip ---
+  // One shared tooltip on `root` (escapes the messages-box overflow that clipped the old per-emote
+  // ::after on the top line / near the edges). Shown on hover via delegation; flips below when there
+  // isn't room above.
+  const emoteTip = document.createElement("div");
+  emoteTip.className = "meridian-emote-tip";
+  root.appendChild(emoteTip);
+  function showEmoteTip(wrap) {
+    const label = wrap.dataset.label || "";
+    if (!label) return;
+    emoteTip.textContent = label;
+    emoteTip.classList.add("show");
+    const rr = root.getBoundingClientRect();
+    const er = wrap.getBoundingClientRect();
+    const tw = emoteTip.offsetWidth, th = emoteTip.offsetHeight;
+    let left = (er.left - rr.left) + er.width / 2;
+    left = Math.max(tw / 2 + 4, Math.min(rr.width - tw / 2 - 4, left));
+    emoteTip.style.left = left + "px";
+    const above = (er.top - rr.top) - 6;
+    if (above - th < 2) {                               // not enough room above → drop below
+      emoteTip.classList.add("below");
+      emoteTip.style.top = (er.bottom - rr.top + 6) + "px";
+    } else {
+      emoteTip.classList.remove("below");
+      emoteTip.style.top = above + "px";
+    }
+  }
+  function hideEmoteTip() { emoteTip.classList.remove("show"); }
+  els.messages.addEventListener("mouseover", (e) => {
+    const wrap = e.target.closest?.(".meridian-emote-wrap");
+    if (wrap) showEmoteTip(wrap);
+  });
+  els.messages.addEventListener("mouseout", (e) => {
+    if (e.target.closest?.(".meridian-emote-wrap")) hideEmoteTip();
+  });
+
   // --- autoscroll + scrollbar visibility ---
   let userScrollUntil = 0;
   let scrollbarTimer = null;
@@ -1231,6 +1322,7 @@
   // If the user manually scrolls back down to the bottom, immediately re-engage autoscroll (no need
   // to wait out the 8 s timeout). Only acts while paused; doesn't flash the scrollbar.
   els.messages.addEventListener("scroll", () => {
+    hideEmoteTip();   // content moved under the cursor → drop the (now stale) emote tooltip
     if (!prefs.autoscroll || !userScrollUntil) return;
     const m = els.messages;
     // Generous threshold (~1.5 lines): on a fast chat the bottom keeps moving as messages arrive
@@ -1683,10 +1775,13 @@
     }
     const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
 
-    // One emote's footprint as a fraction of the bar (bubble width + ring/spacing). Two markers
-    // closer than this would touch, so we GROUP them. As a bar-fraction it's resolution-independent
-    // (a 10 min and a 6 h stream both group "emotes that would touch").
-    const EMOTE_W = WAVE_GEO.bubble + 6;
+    // One emote's footprint as a fraction of the bar. Markers are CENTERED and wide emotes render
+    // up to 40px across (the `.meridian-wave-emote img` max-width), so a footprint based on the
+    // square bubble (16px) let wide neighbours sit almost edge-to-edge. Use the max rendered width
+    // plus breathing room so even the widest neighbours keep a clear gap; closer surges collapse
+    // into a "+N". Resolution-independent (a 10 min and a 6 h stream group the same way).
+    const MAX_EMOTE_W = 40;             // matches .meridian-wave-emote img max-width
+    const EMOTE_W = MAX_EMOTE_W + 1;    // + tiny gap between adjacent markers
     const FP = EMOTE_W / barW;
 
     // Cluster surges into non-overlapping markers, each anchored on its STRONGEST surge.

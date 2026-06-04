@@ -103,8 +103,8 @@
   /* Roomier than the title bar — the input field needs breathing space on all sides. */
   padding: 7px 8px;
   gap: 6px;
-  /* Stretch so the send button matches the input's height exactly. */
-  align-items: stretch;
+  /* Center the fixed-height input + send vertically (both pinned to 28px below). */
+  align-items: center;
   border-bottom-left-radius: var(--meridian-radius);
   border-bottom-right-radius: var(--meridian-radius);
   border-top: 1px solid rgba(255,255,255,0.10);
@@ -320,6 +320,35 @@
   100% { transform: translateX(400%); }
 }
 
+/* Live Twitch viewer count — "Ghost" pill, top-right inside the panel (overlay + docked).
+   Matches the "Ghost" design reference (meridian-chat): near-invisible dark pill, faint hairline. */
+.meridian-viewers {
+  position: absolute;
+  top: calc(var(--meridian-header-h) + 8px);
+  right: 10px;
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px 3px 5px;
+  background: rgba(8, 8, 11, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  color: rgba(255, 255, 255, 0.62);
+  border-radius: 999px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  z-index: 4;
+  pointer-events: none;
+}
+.meridian-viewers.show { display: inline-flex; }
+.meridian-viewers-eye { display: block; flex: none; fill: none; stroke: rgba(255, 255, 255, 0.45); }
+/* Drop below a status banner when one is showing, so they don't overlap. */
+.meridian-root.meridian-has-banner .meridian-viewers { top: calc(var(--meridian-header-h) + var(--meridian-banner-h) + 4px); }
+
 /* Messages — fills the middle, between the (always-present) bars. */
 .meridian-messages {
   position: absolute;
@@ -354,6 +383,11 @@
   line-height: 1.35;
   word-wrap: break-word;
   overflow-wrap: anywhere;
+  /* Skip layout/paint for off-screen messages so resizing (and scrolling a long backlog) only
+     reflows what's visible. `contain-intrinsic-size: auto …` remembers each row's last height so
+     the scrollbar stays close to accurate. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 20px;
 }
 .meridian-msg.notice { opacity: 0.75; font-style: italic; }
 /* /me (CTCP ACTION) messages render italic, like other chat clients. */
@@ -393,27 +427,25 @@
   display: inline-block;
   vertical-align: middle;
 }
-.meridian-emote-wrap::after {
-  content: attr(data-label);
+/* Emote name/provider tooltip. A shared element parented to `root` (not a per-emote ::after) so it
+   escapes the messages box overflow — the old ::after was clipped on the top line + near the edges,
+   so the label often didn't show. Positioned by JS on hover; flips below when short on room above. */
+.meridian-emote-tip {
   position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%);
+  display: none;
+  transform: translate(-50%, -100%);
   background: rgba(20, 20, 24, 0.96);
   color: #fff;
-  font-size: 11px;
-  font-family: system-ui, sans-serif;
-  font-weight: 500;
+  font: 500 11px/1.2 system-ui, sans-serif;
   padding: 3px 6px;
   border-radius: 4px;
   white-space: nowrap;
   pointer-events: none;
-  opacity: 0;
-  transition: opacity 80ms ease;
-  z-index: 10;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  z-index: 30;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
-.meridian-emote-wrap:hover::after { opacity: 1; }
+.meridian-emote-tip.show { display: block; }
+.meridian-emote-tip.below { transform: translate(-50%, 0); }
 .meridian-emote {
   display: inline-block;
   vertical-align: middle;
@@ -433,14 +465,22 @@
 
 .meridian-input {
   flex: 1;
-  display: flex;
-  align-items: center;        /* vertically center the placeholder + typed text */
+  display: block;
+  box-sizing: border-box;
+  /* Fixed height + line-height EQUAL to it centers a single line of text AND the empty caret. The
+     "border" is an inset box-shadow (not a real border) so it doesn't shrink the content box — that
+     keeps line-height == content height exactly, otherwise the text sits ~1px high. A flex
+     contenteditable left the bare caret pinned to the top. Emote chips center via vertical-align. */
+  height: 28px;
   background: rgba(255,255,255,0.06);
-  border: 1px solid #38383F;
+  box-shadow: inset 0 0 0 1px #38383F;
   color: #F5F5F6;
   border-radius: 9px;
   padding: 0 10px;
   font: inherit;
+  /* MUST come after `font: inherit` — the font shorthand resets line-height, so declaring it
+     earlier let the inherited line-height win and the text sat at the top. */
+  line-height: 28px;
   outline: none;
   user-select: text;
   min-width: 0;
@@ -448,11 +488,10 @@
   white-space: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  line-height: 1.5;
   scrollbar-width: none;
 }
 .meridian-input::-webkit-scrollbar { display: none; }
-.meridian-input:focus { border-color: #8257FF; box-shadow: 0 0 0 3px rgba(130,87,255,0.16); }
+.meridian-input:focus { box-shadow: inset 0 0 0 1px #8257FF, 0 0 0 3px rgba(130,87,255,0.16); }
 .meridian-input.disabled { opacity: 0.5; pointer-events: none; }
 .meridian-input:empty::before {
   content: attr(data-placeholder);
@@ -469,7 +508,8 @@
   color: #fff;
   border: none;
   border-radius: 9px;
-  padding: 5px 9px;
+  height: 28px;            /* match the input's fixed height */
+  padding: 0 9px;
   cursor: pointer;
   flex: none;
   display: inline-flex;

@@ -98,7 +98,7 @@ const defaults = {
   sites: {},
   highlightTimeline: true, highlightEnabled: true, highlightThreshold: 5, highlightThresholds: {}, highlightWindowSec: 12, highlightWindows: {}, highlightAnchorLive: true,
   highlightOffsetSec: 5, highlightColor: "#b388ff",
-  highlightPersistEmotes: true, highlightPersistDensity: true,
+  highlightPersistEmotes: true, highlightPersistDensity: true, showViewers: false,
   emote7tv: true, emoteBttv: true, emoteFfz: true,
   textStyle: "shadow", boldText: true,
   ytLoadOn: "live"
@@ -154,6 +154,7 @@ async function loadAllFields() {
   $("#boundToPlayer").checked = p.boundToPlayer !== false;
   $("#ytLoadOn").value = p.ytLoadOn === "all" ? "all" : "live";
   $("#hideDeleted").checked = p.hideDeleted === true;
+  $("#showViewers").checked = p.showViewers === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
   $("#extensionEnabled").checked = p.extensionEnabled !== false;
   $("#highlightTimeline").checked = p.highlightTimeline === true;
@@ -316,6 +317,7 @@ $("#saveMaxMessages").addEventListener("click", async () => {
   flash($("#saveMaxMessages"));
 });
 $("#hideDeleted").addEventListener("change", async (e) => { await setPrefs({ hideDeleted: e.target.checked }); });
+$("#showViewers").addEventListener("change", async (e) => { await setPrefs({ showViewers: e.target.checked }); });
 $("#highlightTimeline").addEventListener("change", async (e) => {
   const on = e.target.checked;
   await setPrefs(on ? { highlightTimeline: true } : { highlightTimeline: false, highlightEnabled: false });
