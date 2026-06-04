@@ -16,10 +16,10 @@
 export const MIN_EMOTE_THRESHOLD = 3;
 
 export class HighlightEngine {
-  constructor({ windowMs = 12000, getWindowMs, getThreshold, onHighlight, onUpdate } = {}) {
+  constructor({ windowMs = 12000, getThreshold, onHighlight, onUpdate } = {}) {
+    // Plain field read in the per-occurrence hot path (no per-call resolution). The content script
+    // updates it on channel switch / pref change via `hlEngine.windowMs = …`.
     this.windowMs = windowMs;
-    // Window can be resolved live (per-channel / global) via getWindowMs; falls back to windowMs.
-    this.getWindowMs = getWindowMs || (() => this.windowMs);
     this.getThreshold = getThreshold || (() => MIN_EMOTE_THRESHOLD);
     this.onHighlight = onHighlight || (() => {});
     this.onUpdate = onUpdate || (() => {});
@@ -30,7 +30,7 @@ export class HighlightEngine {
   // Record one (emote, user) occurrence at wall-clock `ts`. `url` is the emote image.
   ingest(name, url, user, ts) {
     if (!name || !user) return;
-    const windowMs = this.getWindowMs();
+    const windowMs = this.windowMs;
     let b = this.buckets.get(name);
     if (!b || ts - b.firstTs > windowMs) {
       // Start a fresh tumbling window anchored at the first occurrence.
@@ -59,7 +59,7 @@ export class HighlightEngine {
   // Drop expired buckets so memory stays bounded by emotes seen in the last window.
   // This is the only place usernames are discarded — the Set is deleted with the bucket.
   prune(now) {
-    const windowMs = this.getWindowMs();
+    const windowMs = this.windowMs;
     for (const [name, b] of this.buckets) {
       if (now - b.firstTs > windowMs) this.buckets.delete(name);
     }

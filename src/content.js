@@ -1061,6 +1061,7 @@
       chatters.clear(); // reset suggestions for the new channel (NAMES will reseed)
       queue.length = 0; delayPrimed = false; updateDelayBanner(); // re-arm buffering for the new channel
       setViewers(null); startViewerPoll();            // refetch viewer count for the new channel
+      applyHighlightWindow();                          // pick up this channel's per-channel window
       emoteReg?.loadForChannel(target).catch(() => {});
       // Expose the active channel so the popup can show per-channel settings.
       prefs._activeChannel = target;
@@ -1118,9 +1119,12 @@
         || next.highlightPersistDensity !== prefs.highlightPersistDensity;
       const colorChanged = next.highlightColor !== prefs.highlightColor;
       const viewersChanged = next.showViewers !== prefs.showViewers;
+      const windowChanged = next.highlightWindowSec !== prefs.highlightWindowSec
+        || JSON.stringify(next.highlightWindows) !== JSON.stringify(prefs.highlightWindows);
       prefs = next;
       const modeChanged = effectiveMode() !== prevMode;
       if (viewersChanged) startViewerPoll(); // start polling, or stop + hide when turned off
+      if (windowChanged) applyHighlightWindow();
       if (channelInputsChanged) { syncChannel(); updateChannelInputFromPrefs(); }
       if (appearanceChanged) applyAppearance();
       if (delayChanged) { applyDelayDisplay(); flushQueue(); }
@@ -1187,9 +1191,13 @@
         (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => {});
         return;
       }
-      // In "auto" the effective mode flips (overlay⇄docked) with fullscreen — re-apply fully.
-      if (siteMode() === "auto") { applyMode(); return; }
-      if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
+      // Our re-layout (dock/undock + player resize nudge) is deferred a frame so it runs AFTER the
+      // browser's fullscreen transition instead of competing with it — keeps the toggle smoother.
+      requestAnimationFrame(() => {
+        // In "auto" the effective mode flips (overlay⇄docked) with fullscreen — re-apply fully.
+        if (siteMode() === "auto") { applyMode(); return; }
+        if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
+      });
     })
   );
 
@@ -1270,7 +1278,10 @@
   const emoteTip = document.createElement("div");
   emoteTip.className = "meridian-emote-tip";
   root.appendChild(emoteTip);
+  let tipWrap = null;
   function showEmoteTip(wrap) {
+    if (wrap === tipWrap) return;   // mouseover re-fires within the same emote — skip the layout reads
+    tipWrap = wrap;
     const label = wrap.dataset.label || "";
     if (!label) return;
     emoteTip.textContent = label;
@@ -1290,13 +1301,15 @@
       emoteTip.style.top = above + "px";
     }
   }
-  function hideEmoteTip() { emoteTip.classList.remove("show"); }
+  function hideEmoteTip() { tipWrap = null; emoteTip.classList.remove("show"); }
   els.messages.addEventListener("mouseover", (e) => {
     const wrap = e.target.closest?.(".meridian-emote-wrap");
     if (wrap) showEmoteTip(wrap);
   });
   els.messages.addEventListener("mouseout", (e) => {
-    if (e.target.closest?.(".meridian-emote-wrap")) hideEmoteTip();
+    const wrap = e.target.closest?.(".meridian-emote-wrap");
+    // Only hide when actually leaving the wrap — not when crossing between its own children.
+    if (wrap && !wrap.contains(e.relatedTarget)) hideEmoteTip();
   });
 
   // --- autoscroll + scrollbar visibility ---
@@ -1352,11 +1365,14 @@
   const density = new DensityTracker({ baseRes: 2 });
   const highlights = new Map(); // key -> { name, url, count, threshold, wallTs, vt, behindLive }
   const hlEngine = new HighlightEngine({
-    getWindowMs: () => highlightWindow() * 1000,   // per-channel / global, resolved live
+    windowMs: highlightWindow() * 1000,            // per-channel/global; refreshed below, not per-occurrence
     getThreshold: highlightThreshold,
     onHighlight: addHighlight,
     onUpdate: bumpHighlight
   });
+  // Push the resolved window into the engine on channel switch / pref change (keeps the per-message
+  // hot path a plain field read instead of re-resolving the channel + clamping every occurrence).
+  function applyHighlightWindow() { hlEngine.windowMs = highlightWindow() * 1000; }
   let waveLayer = null;
   let lastSeries = null, lastSpan = 0, lastStart = 0, lastOff = 0;
   let densityRes = 5, densityPeak = 1, lastPeakAt = 0, lastResAt = 0;
