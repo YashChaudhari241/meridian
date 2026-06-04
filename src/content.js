@@ -35,8 +35,8 @@
       height
     };
   }
-  // Default YouTube handle / Kick slug → Twitch channel mappings (one shared map; keys are the
-  // lower-cased handle/slug, values the Twitch login). Seeds esports + a few popular channels.
+  // Default YouTube handle / Kick slug → Twitch channel mappings (separate maps per site;
+  // keys are the lower-cased handle/slug, values the Twitch login).
   const DEFAULT_MAPPINGS = {
     eslcs: "eslcs",
     pgl: "pgl",
@@ -47,9 +47,14 @@
     tenz: "tenz",
     ohnepixel: "ohnepixel"
   };
+  const DEFAULT_KICK_MAPPINGS = {
+    xqc: "xqc",
+    destiny: "destiny"
+  };
   const defaults = {
     channel: "",
     mappings: { ...DEFAULT_MAPPINGS },
+    kickMappings: { ...DEFAULT_KICK_MAPPINGS },
     overrideChannel: "",
     rect: null,                  // computed on first load
     hidden: false,
@@ -486,7 +491,8 @@
   els.channel.addEventListener("blur", scrollChannelToStart);
 
   function autoChannel() {
-    if (detectedHandle && prefs.mappings?.[detectedHandle]) return prefs.mappings[detectedHandle];
+    const map = SITE === kickAdapter ? prefs.kickMappings : prefs.mappings;
+    if (detectedHandle && map?.[detectedHandle]) return map[detectedHandle];
     return "";
   }
   function resolveChannel() {
@@ -968,6 +974,7 @@
       if (next.extensionEnabled === false) { location.reload(); return; }
       const channelInputsChanged = (next.channel !== prefs.channel)
         || JSON.stringify(next.mappings) !== JSON.stringify(prefs.mappings)
+        || JSON.stringify(next.kickMappings) !== JSON.stringify(prefs.kickMappings)
         || next.overrideChannel !== prefs.overrideChannel;
       const appearanceChanged = next.opacity !== prefs.opacity
         || next.fontSize !== prefs.fontSize

@@ -85,8 +85,9 @@ const DEFAULT_MAPPINGS = {
   starladder_cs: "starladder_cs_en", starladder: "starladder_cs_en",
   valorantesports: "valorant", tenz: "tenz", ohnepixel: "ohnepixel"
 };
+const DEFAULT_KICK_MAPPINGS = { xqc: "xqc", destiny: "destiny" };
 const defaults = {
-  channel: "", mappings: { ...DEFAULT_MAPPINGS }, overrideChannel: "",
+  channel: "", mappings: { ...DEFAULT_MAPPINGS }, kickMappings: { ...DEFAULT_KICK_MAPPINGS }, overrideChannel: "",
   chatDelaySec: 0, updateFrequencyMs: 0, autoscroll: true,
   hotkeyToggle: "", hotkeyFocus: "",
   opacity: 0.51, fontSize: 13, blurRadius: 0, maxMessages: 300,
@@ -132,6 +133,7 @@ function parseMappings(text) {
 async function loadAllFields() {
   const p = await getPrefs();
   $("#mappings").value = mappingsToText(p.mappings || {});
+  $("#kickMappings").value = mappingsToText(p.kickMappings || {});
   $("#delay").value = p.chatDelaySec ?? 0;
   $("#updateFreq").value = p.updateFrequencyMs ?? 0;
   $("#maxMessages").value = p.maxMessages ?? 300;
@@ -204,7 +206,10 @@ async function initSiteCard() {
   const card = $("#siteCard");
   const sel = $("#siteMode");
   const isYouTube = activeHost ? /(^|\.)youtube\.com$/.test(activeHost) : false;
+  const isKick = activeHost ? /(^|\.)kick\.com$/.test(activeHost) : false;
   $("#ytLoadOnCard").style.display = isYouTube ? "" : "none";
+  $("#ytMappingsCard").style.display = isYouTube ? "" : "none";
+  $("#kickMappingsCard").style.display = isKick ? "" : "none";
   if (!activeHost || !/^https?:/.test(activeTab?.url || "")) {
     card.style.display = "none"; sel.disabled = true; return;
   }
@@ -238,6 +243,17 @@ $("#saveMappings").addEventListener("click", async () => {
   await setPrefs({ mappings });
   const count = Object.keys(mappings).length;
   const msg = $("#mappingsMsg");
+  msg.textContent = errors.length
+    ? `Saved ${count}. Skipped: ${errors.join("; ")}`
+    : `Saved ${count} mapping${count === 1 ? "" : "s"} ✓`;
+  msg.className = errors.length ? "err" : "hint";
+  setTimeout(() => { msg.textContent = ""; msg.className = "hint"; }, 3000);
+});
+$("#saveKickMappings").addEventListener("click", async () => {
+  const { mappings, errors } = parseMappings($("#kickMappings").value);
+  await setPrefs({ kickMappings: mappings });
+  const count = Object.keys(mappings).length;
+  const msg = $("#kickMappingsMsg");
   msg.textContent = errors.length
     ? `Saved ${count}. Skipped: ${errors.join("; ")}`
     : `Saved ${count} mapping${count === 1 ? "" : "s"} ✓`;

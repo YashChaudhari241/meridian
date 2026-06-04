@@ -62,12 +62,19 @@
     <div class="card" title="Keep the overlay inside the player, following theater and fullscreen">
       <label class="row"><span>Bind overlay to the video player</span><input id="boundToPlayer" type="checkbox" /></label>
     </div>
-    <div class="card" title="Map this page's YouTube handle or Kick slug to a Twitch channel, joined automatically">
-      <label>Channel → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
+    <div class="card" id="ytMappingsCard" title="Map this page's YouTube handle to a Twitch channel, joined automatically">
+      <label>YouTube → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
       <textarea id="mappings" rows="8" spellcheck="false" placeholder="@ESLCS = eslcs
 xqc = xqc"></textarea>
       <button id="saveMappings">Save mappings</button>
       <span id="mappingsMsg" class="hint"></span>
+    </div>
+    <div class="card" id="kickMappingsCard" title="Map a Kick slug to a Twitch channel, joined automatically">
+      <label>Kick → Twitch mappings (one per line: <code>slug = twitch_channel</code>)</label>
+      <textarea id="kickMappings" rows="8" spellcheck="false" placeholder="@xqc = xqc
+destiny = destiny"></textarea>
+      <button id="saveKickMappings">Save mappings</button>
+      <span id="kickMappingsMsg" class="hint"></span>
     </div>
   </section>
 
