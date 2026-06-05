@@ -1,0 +1,89 @@
+/* ============================================================
+   MERIDIAN — Design tokens (colors, type, spacing, elevation)
+   From the Claude Design handoff. Dark by default, violet accent.
+   No remote @font-face here so it's safe to inject into a host
+   page (YouTube/Kick) under their CSP — falls back to system UI.
+   ============================================================ */
+:root {
+  /* ---------- BRAND / ACCENT — Meridian Violet ---------- */
+  --violet-50:  #F1ECFF;
+  --violet-100: #E1D6FF;
+  --violet-200: #C6B0FF;
+  --violet-300: #A98AFF;
+  --violet-400: #9270FF;
+  --violet-500: #8257FF;  /* primary */
+  --violet-600: #6F40F2;  /* hover/press-deep */
+  --violet-700: #5B30D6;
+  --violet-800: #46259E;
+  --violet-900: #2F1A66;
+
+  --accent:        var(--violet-500);
+  --accent-hover:  var(--violet-400);
+  --accent-press:  var(--violet-600);
+  --accent-soft:   color-mix(in oklab, var(--violet-500) 16%, transparent);
+  --accent-ring:   color-mix(in oklab, var(--violet-500) 55%, transparent);
+  --on-accent:     #FFFFFF;
+
+  /* ---------- SURFACES (dark) ---------- */
+  --bg-0: #0C0C0F;   /* page / behind popup */
+  --bg-1: #141417;   /* popup body, overlay panel */
+  --bg-2: #1B1B20;   /* cards, section blocks */
+  --bg-3: #232329;   /* inputs, raised rows */
+  --bg-4: #2D2D34;   /* hover on raised, menus */
+
+  --border-1: #2A2A31;
+  --border-2: #38383F;
+  --border-strong: #4A4A52;
+
+  /* ---------- TEXT ---------- */
+  --fg-1: #F5F5F6;
+  --fg-2: #B4B4BC;
+  --fg-3: #82828C;
+  --fg-4: #5C5C65;
+
+  /* ---------- SEMANTIC ---------- */
+  --success: #41C46B;
+  --success-soft: color-mix(in oklab, var(--success) 16%, transparent);
+  --warning: #E8A13A;
+  --warning-soft: color-mix(in oklab, var(--warning) 16%, transparent);
+  --danger:  #F0556A;
+  --danger-soft: color-mix(in oklab, var(--danger) 16%, transparent);
+  --info:    #4C9DF0;
+
+  /* ---------- PLATFORM ACCENTS ---------- */
+  --twitch:  #9146FF;
+  --youtube: #FF0033;
+  --kick:    #53FC18;
+
+  /* ---------- ELEVATION ---------- */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-md: 0 6px 20px rgba(0,0,0,.45);
+  --shadow-lg: 0 16px 48px rgba(0,0,0,.55);
+  --shadow-pop: 0 12px 40px rgba(0,0,0,.5), 0 0 0 1px var(--border-1);
+  --glow-accent: 0 0 0 3px var(--accent-ring);
+
+  /* ---------- RADII ---------- */
+  --r-xs: 5px;
+  --r-sm: 7px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-pill: 999px;
+
+  /* ---------- SPACING ---------- */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+
+  /* ---------- TYPE ---------- */
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 11px; --text-sm: 13px; --text-base: 14px; --text-md: 15px;
+  --text-lg: 17px; --text-xl: 20px; --text-2xl: 24px; --text-3xl: 30px;
+
+  --lh-tight: 1.2; --lh-snug: 1.35; --lh-normal: 1.5;
+
+  --motion-fast: 110ms;
+  --motion: 180ms;
+  --ease: cubic-bezier(.2,.6,.2,1);
+}

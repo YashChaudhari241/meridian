@@ -1,112 +1,238 @@
-body {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  width: 320px;
-  margin: 0;
-  padding: 10px;
-  background: #15151a;
-  color: #eee;
-  font-size: 13px;
-}
-.hdr { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-.hdr .sub { font-size: 11px; opacity: 0.65; }
+/* Meridian settings popup — redesigned per the Claude Design handoff.
+   Compact 420px, violet accent, rounded cards, custom toggles/sliders.
+   Tokens come from theme.css. */
 
+* { box-sizing: border-box; }
+
+body {
+  font-family: var(--font-sans);
+  width: 420px;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-1);
+  color: var(--fg-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- header ---------- */
+.hdr {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px 10px;
+}
+.hdr .mark { width: 24px; height: 24px; border-radius: 7px; flex: none; }
+.hdr .titlewrap { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.hdr strong { font-weight: 700; font-size: 14px; color: var(--fg-1); letter-spacing: -.015em; }
+.hdr .sub { font-size: 11px; color: var(--fg-3); }
+/* connection chip in the header */
+#headerStatus {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 500; color: var(--fg-2);
+  background: var(--bg-2); border: 1px solid var(--border-1);
+  border-radius: var(--r-pill); padding: 4px 9px; white-space: nowrap;
+}
+#headerStatus .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-4); flex: none; }
+#headerStatus.ok .dot { background: var(--success); }
+#headerStatus.warn .dot { background: var(--warning); }
+#headerStatus.bad .dot { background: var(--danger); }
+
+/* ---------- tabs ---------- */
 .tabs {
   display: flex;
   gap: 2px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-1);
 }
 .tab {
+  position: relative;
   background: transparent;
-  border: none;
-  color: #bbb;
-  padding: 6px 8px;
+  border: 0;
+  color: var(--fg-3);
+  padding: 8px 8px 10px;
   cursor: pointer;
-  font: inherit;
+  font-family: var(--font-sans);
   font-size: 12px;
-  border-bottom: 2px solid transparent;
+  font-weight: 500;
   border-radius: 0;
 }
-.tab:hover { color: #fff; }
-.tab.active { color: #fff; border-bottom-color: #9146ff; }
+.tab:hover { color: var(--fg-2); background: transparent; }
+.tab.active { color: var(--fg-1); font-weight: 600; }
+.tab.active::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px;
+  height: 2px; background: var(--accent); border-radius: 2px;
+}
 
-.panel { display: none; }
-.panel.active { display: block; }
+/* ---------- panels / cards ----------
+   The popup window itself scrolls (one scrollbar) — panels don't get their own. */
+.panel { display: none; padding: 12px; flex-direction: column; gap: 9px; }
+.panel.active { display: flex; }
 
 .card {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
-  padding: 8px;
-  margin-bottom: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-1);
+  border-radius: 11px;
+  padding: 11px 12px;
+  margin: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
-.card label { width: 100%; font-size: 11px; opacity: 0.7; }
-/* Collapsible Advanced section reuses the card look but must be block (not flex). */
 details.card { display: block; }
 details.card > summary {
   cursor: pointer;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
-  opacity: 0.85;
+  color: var(--fg-1);
   list-style: revert;
 }
-details.card[open] > summary { margin-bottom: 6px; }
-.row { display: flex; gap: 6px; align-items: center; width: 100%; }
+details.card[open] > summary { margin-bottom: 8px; }
 
-input[type="text"], input:not([type]), input[type="number"], select {
+.card label { width: 100%; font-size: 12.5px; font-weight: 500; color: var(--fg-1); }
+.card .hint, .hint { font-size: 11.5px; color: var(--fg-3); line-height: 1.45; width: 100%; }
+.row { display: flex; gap: 7px; align-items: center; width: 100%; }
+
+/* connection card: badge+text flex, with Connect/Disconnect on the right */
+.conncard #status { flex: 1; min-width: 0; }
+.conncard #connectTwitch, .conncard #disconnectTwitch { flex: none; }
+
+/* ---------- inputs ---------- */
+input[type="text"], input:not([type]), input[type="number"], select, textarea {
   flex: 1;
   min-width: 0;
-  background: rgba(255,255,255,0.06);
-  color: #fff;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 4px;
-  padding: 5px 7px;
-  font: inherit;
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border: 1px solid var(--border-2);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
   outline: none;
 }
-input[type="range"] { width: 100%; }
-input[readonly] { font: 12px ui-monospace, Menlo, Consolas, monospace; }
-
-button {
-  background: #9146ff;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  padding: 5px 10px;
-  cursor: pointer;
-  font: inherit;
+input[type="number"], input[readonly] {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
-button:hover { background: #a970ff; }
-button.secondary { background: rgba(255,255,255,0.08); }
-button.secondary:hover { background: rgba(255,255,255,0.16); }
-
+input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+select { cursor: pointer; appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2382828C' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; padding-right: 30px; }
 textarea {
+  /* full-width row of its own inside the flex card, so the Save button wraps BELOW it
+     (not side-by-side, which squeezed the textarea and wrapped its text) */
+  flex: 1 1 100%;
   width: 100%;
-  background: rgba(255,255,255,0.06);
-  color: #fff;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 4px;
-  padding: 6px 8px;
-  font: 12px ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
+  font-size: 12px;
   resize: vertical;
-  outline: none;
-  box-sizing: border-box;
 }
-code { font: 11px ui-monospace, Menlo, Consolas, monospace; opacity: 0.85; }
+code { font-family: var(--font-mono); font-size: 11px; color: var(--violet-200); }
 
-.hint { font-size: 11px; opacity: 0.6; line-height: 1.4; }
-.err { color: #ff7a7a; font-size: 11px; }
-.who { font-size: 12px; }
-
-.status-line { font-size: 12px; }
-.status-line .dot {
-  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-  background: #888; margin-right: 6px; vertical-align: middle;
+/* ---------- buttons ---------- */
+button {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 13px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background var(--motion-fast) var(--ease);
 }
-.status-line.ok .dot { background: #4ade80; }
-.status-line.warn .dot { background: #fbbf24; }
-.status-line.bad .dot { background: #f87171; }
+button:hover { background: var(--accent-hover); }
+button:active { background: var(--accent-press); transform: translateY(1px); }
+button.secondary {
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  color: var(--fg-2);
+}
+button.secondary:hover { background: var(--bg-4); }
+/* Destructive action (Reset everything). */
+button.danger {
+  background: transparent;
+  border: 1px solid rgba(229, 72, 77, 0.5);
+  color: #ff6b6f;
+}
+button.danger:hover { background: rgba(229, 72, 77, 0.14); }
+button.danger:active { background: rgba(229, 72, 77, 0.22); }
+button.danger.armed { background: #e5484d; border-color: #e5484d; color: #fff; }
+
+/* ---------- toggle switches (checkboxes styled as pills) ---------- */
+.card label.row, label.toggle {
+  display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;
+}
+/* label text comes first in the DOM and flexes; the control hugs the right */
+.card label.row > span, label.toggle > span {
+  flex: 1; font-size: 12.5px; font-weight: 500; color: var(--fg-1);
+}
+input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  flex: none;
+  width: 34px; height: 20px; border-radius: 999px;
+  background: var(--bg-4); position: relative; cursor: pointer;
+  transition: background var(--motion) var(--ease);
+  margin: 0; padding: 0; border: 0;
+}
+input[type="checkbox"]::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%; background: #fff;
+  transition: left var(--motion) var(--ease);
+  box-shadow: var(--shadow-sm);
+}
+input[type="checkbox"]:checked { background: var(--accent); }
+input[type="checkbox"]:checked::after { left: 16px; }
+input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* color input stays compact */
+input[type="color"] {
+  flex: none; width: 38px; height: 24px; padding: 1px;
+  background: var(--bg-3); border: 1px solid var(--border-2);
+  border-radius: var(--r-sm); cursor: pointer;
+}
+
+/* ---------- range slider ---------- */
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 5px; border-radius: 3px; cursor: pointer;
+  background: linear-gradient(to right, var(--accent) 0 var(--pct, 50%), var(--bg-4) var(--pct, 50%) 100%);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%; background: #fff;
+  box-shadow: var(--shadow-sm), 0 0 0 3px var(--accent-soft); cursor: pointer;
+}
+.sliderhead { display: flex; justify-content: space-between; align-items: baseline; width: 100%; }
+.sliderhead .val { font-size: 12px; font-weight: 600; font-family: var(--font-mono); color: var(--accent); }
+
+/* ---------- status / misc ---------- */
+.hint { font-size: 11.5px; color: var(--fg-3); line-height: 1.45; }
+.err { color: var(--danger); font-size: 11.5px; }
+.status-line { font-size: 12.5px; display: flex; align-items: center; gap: 9px; }
+.status-line .badge {
+  width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center;
+  background: var(--bg-3); color: var(--fg-3);
+}
+.status-line .badge svg { width: 17px; height: 17px; }
+.status-line.ok .badge { background: var(--success-soft); color: var(--success); }
+.status-line.warn .badge { background: var(--warning-soft); color: var(--warning); }
+.status-line.bad .badge { background: var(--danger-soft); color: var(--danger); }
+.status-line .txt { flex: 1; min-width: 0; }
+.status-line .txt .title { font-size: 12.5px; font-weight: 600; color: var(--fg-1); }
+.status-line .txt .meta { font-size: 11.5px; color: var(--fg-3); margin-top: 1px; }
+
+kbd {
+  font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; color: var(--fg-1);
+  background: var(--bg-3); border: 1px solid var(--border-2); border-bottom-width: 2px;
+  border-radius: 6px; padding: 4px 7px;
+}
+
+/* window scrollbar */
+::-webkit-scrollbar { width: 9px; }
+::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 999px; border: 2px solid var(--bg-1); background-clip: padding-box; }

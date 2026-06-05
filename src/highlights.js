@@ -6,6 +6,10 @@
 //
 // Uniqueness: a `Set` of user logins per bucket means one viewer counts once no matter how
 // many times (or in how many messages) they spam the same emote.
+//
+// Privacy: the `users` Set lives only for the bucket's window (default 12 s). Once the
+// window expires, `prune()` deletes the entire bucket — usernames are not retained. Nothing
+// in this class is ever persisted to storage.
 
 // Minimum unique viewers per window for an emote highlight — floor enforced here so the
 // timeline never clutters with low-signal surges.
@@ -13,6 +17,8 @@ export const MIN_EMOTE_THRESHOLD = 3;
 
 export class HighlightEngine {
   constructor({ windowMs = 12000, getThreshold, onHighlight, onUpdate } = {}) {
+    // Plain field read in the per-occurrence hot path (no per-call resolution). The content script
+    // updates it on channel switch / pref change via `hlEngine.windowMs = …`.
     this.windowMs = windowMs;
     this.getThreshold = getThreshold || (() => MIN_EMOTE_THRESHOLD);
     this.onHighlight = onHighlight || (() => {});
@@ -24,8 +30,9 @@ export class HighlightEngine {
   // Record one (emote, user) occurrence at wall-clock `ts`. `url` is the emote image.
   ingest(name, url, user, ts) {
     if (!name || !user) return;
+    const windowMs = this.windowMs;
     let b = this.buckets.get(name);
-    if (!b || ts - b.firstTs > this.windowMs) {
+    if (!b || ts - b.firstTs > windowMs) {
       // Start a fresh tumbling window anchored at the first occurrence.
       b = { firstTs: ts, users: new Set(), triggered: false, peak: 0, threshold: 0, key: null, url };
       this.buckets.set(name, b);
@@ -50,9 +57,11 @@ export class HighlightEngine {
   }
 
   // Drop expired buckets so memory stays bounded by emotes seen in the last window.
+  // This is the only place usernames are discarded — the Set is deleted with the bucket.
   prune(now) {
+    const windowMs = this.windowMs;
     for (const [name, b] of this.buckets) {
-      if (now - b.firstTs > this.windowMs) this.buckets.delete(name);
+      if (now - b.firstTs > windowMs) this.buckets.delete(name);
     }
   }
 
@@ -85,6 +94,22 @@ export class DensityTracker {
   }
 
   reset() { this.buckets.clear(); }
+
+  // Serialize to a compact form for persistence (replay the wave on the VOD). Capped to the most
+  // recent `cap` base buckets so a marathon stream can't grow storage without bound.
+  serialize(cap = 22000) {
+    let entries = [...this.buckets.entries()];
+    if (entries.length > cap) entries = entries.slice(-cap);
+    return { baseRes: this.baseRes, buckets: entries };
+  }
+  // Restore buckets saved by `serialize` (only when the base resolution matches).
+  restore(data) {
+    if (!data || data.baseRes !== this.baseRes || !Array.isArray(data.buckets)) return;
+    for (const [i, w] of data.buckets) {
+      if (Number.isFinite(i) && Number.isFinite(w)) this.buckets.set(i, w);
+    }
+  }
+  get size() { return this.buckets.size; }
 
   // Pick a display resolution (seconds/point) for a stream of `durationSec`. Targets roughly
   // a fixed number of points so a 10 min stream lands near 10 s/point and a 6 h stream near

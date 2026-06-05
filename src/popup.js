@@ -1,9 +1,17 @@
+import { DEFAULT_MAPPINGS, DEFAULT_KICK_MAPPINGS } from "./mappings.js";
+
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const PREFS_KEY = "meridian.prefs";
 const UI_KEY = "meridian.ui";
 
 function send(type, extra = {}) { return chrome.runtime.sendMessage({ type, ...extra }); }
+// Paint the accent-filled portion of a range slider (driven by CSS var --pct).
+function setRangeFill(el) {
+  const min = +el.min || 0, max = +el.max || 100;
+  const pct = ((+el.value - min) / (max - min)) * 100;
+  el.style.setProperty("--pct", pct + "%");
+}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -19,13 +27,30 @@ async function activateTab(name, persist = true) {
 $$(".tab").forEach((b) => b.addEventListener("click", () => activateTab(b.dataset.tab)));
 
 // ---------- auth (official Twitch OAuth; anonymous read-only by default) ----------
+// Lucide check glyph for the connection badge.
+const CHECK_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+const EYE_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.94 10.94 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.94 10.94 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg>`;
+
 async function refreshStatus() {
   const s = await send("AUTH_STATUS");
   if (!s?.ok) return;
-  let cls, text;
-  if (s.connected) { cls = "ok"; text = `Connected as ${s.displayName || s.login}`; }
-  else { cls = "warn"; text = "Anonymous read only"; }
-  $("#status").innerHTML = `<div class="status-line ${cls}"><span class="dot"></span>${escapeHtml(text)}</div>`;
+  const chip = $("#headerStatus");
+  if (s.connected) {
+    const who = s.displayName || s.login;
+    $("#status").innerHTML =
+      `<div class="status-line ok"><span class="badge">${CHECK_SVG}</span>` +
+      `<span class="txt"><div class="title">Connected as ${escapeHtml(who)}</div>` +
+      `<div class="meta">Read-only chat works without connecting.</div></span></div>`;
+    chip.className = "ok";
+    $("#headerStatusText").textContent = who;
+  } else {
+    $("#status").innerHTML =
+      `<div class="status-line warn"><span class="badge">${EYE_SVG}</span>` +
+      `<span class="txt"><div class="title">Anonymous read-only</div>` +
+      `<div class="meta">Connect Twitch to send messages.</div></span></div>`;
+    chip.className = "warn";
+    $("#headerStatusText").textContent = "Anonymous";
+  }
   $("#connectTwitch").style.display = s.connected ? "none" : "";
   $("#disconnectTwitch").style.display = s.connected ? "" : "none";
   // Functional setup helper (not a setting description): how to enable connecting.
@@ -56,24 +81,20 @@ $("#extensionEnabled").addEventListener("change", async (e) => {
 });
 
 // ---------- prefs load/save ----------
-// Default YouTube handle / Kick slug → Twitch channel mappings (mirrors content.js DEFAULT_MAPPINGS).
-const DEFAULT_MAPPINGS = {
-  eslcs: "eslcs", pgl: "pgl", blastpremier: "blastpremier",
-  starladder_cs: "starladder_cs_en", starladder: "starladder_cs_en",
-  valorantesports: "valorant", tenz: "tenz", ohnepixel: "ohnepixel"
-};
+// Default YouTube handle / Kick slug → Twitch channel mappings — shared with content.js (one source).
 const defaults = {
-  channel: "", mappings: { ...DEFAULT_MAPPINGS }, overrideChannel: "",
+  channel: "", mappings: { ...DEFAULT_MAPPINGS }, kickMappings: { ...DEFAULT_KICK_MAPPINGS }, overrideChannel: "",
   chatDelaySec: 0, updateFrequencyMs: 0, autoscroll: true,
-  hotkeyToggle: "", hotkeyFocus: "",
+  hotkeyToggle: "", hotkeyFocus: "", hotkeyPauseScroll: "",
   opacity: 0.51, fontSize: 13, blurRadius: 0, maxMessages: 300,
   blurEnabled: false, bgEnabled: true, shadowEnabled: false, outlineEnabled: true,
   boundToPlayer: true,
   blockedWords: [], hideDeleted: true,
   hidden: false, extensionEnabled: true,
   sites: {},
-  highlightTimeline: true, highlightEnabled: true, highlightThreshold: 5, highlightAnchorLive: true,
+  highlightTimeline: true, highlightEnabled: true, highlightThreshold: 5, highlightThresholds: {}, highlightWindowSec: 12, highlightWindows: {}, highlightAnchorLive: true,
   highlightOffsetSec: 5, highlightColor: "#b388ff",
+  highlightPersistEmotes: true, highlightPersistDensity: true, showViewers: false,
   emote7tv: true, emoteBttv: true, emoteFfz: true,
   textStyle: "shadow", boldText: true,
   ytLoadOn: "live"
@@ -108,45 +129,95 @@ function parseMappings(text) {
 async function loadAllFields() {
   const p = await getPrefs();
   $("#mappings").value = mappingsToText(p.mappings || {});
+  $("#kickMappings").value = mappingsToText(p.kickMappings || {});
   $("#delay").value = p.chatDelaySec ?? 0;
   $("#updateFreq").value = p.updateFrequencyMs ?? 0;
   $("#maxMessages").value = p.maxMessages ?? 300;
-  $("#opacity").value = Math.round((p.opacity ?? 0.51) * 100);
-  $("#opacityVal").textContent = `${Math.round((p.opacity ?? 0.51) * 100)}%`;
+  const opPct = Math.round((p.opacity ?? 0.51) * 100);
+  $("#opacity").value = opPct;
+  $("#opacityVal").textContent = `${opPct}%`;
+  setRangeFill($("#opacity"));
   $("#fontSize").value = p.fontSize ?? 13;
   $("#blurRadius").value = p.blurRadius ?? 0;
   $("#blurRadiusVal").textContent = `${p.blurRadius ?? 0}px`;
+  setRangeFill($("#blurRadius"));
   $("#blurEnabled").checked = p.blurEnabled === true;
   $("#bgEnabled").checked = p.bgEnabled !== false;
   $("#shadowEnabled").checked = p.shadowEnabled === true;
   $("#outlineEnabled").checked = p.outlineEnabled !== false;
   $("#hotkeyToggle").value = p.hotkeyToggle || "";
   $("#hotkeyFocus").value = p.hotkeyFocus || "";
+  $("#hotkeyPauseScroll").value = p.hotkeyPauseScroll || "";
   $("#boundToPlayer").checked = p.boundToPlayer !== false;
   $("#ytLoadOn").value = p.ytLoadOn === "all" ? "all" : "live";
   $("#hideDeleted").checked = p.hideDeleted === true;
+  $("#showViewers").checked = p.showViewers === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
   $("#extensionEnabled").checked = p.extensionEnabled !== false;
   $("#highlightTimeline").checked = p.highlightTimeline === true;
   $("#highlightEnabled").checked = p.highlightEnabled === true;
   $("#highlightAnchorLive").checked = p.highlightAnchorLive !== false;
-  $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 5);
+  // Per-channel threshold/window: scope to the channel the ACTIVE TAB is currently on (asked
+  // directly via a content-script message — the global `_activeChannel` storage key can be stale
+  // when several tabs are open). Fall back to the stored key, then to global.
+  let liveChannel = "";
+  try {
+    if (activeTab?.id) {
+      const r = await chrome.tabs.sendMessage(activeTab.id, { type: "GET_ACTIVE_CHANNEL" });
+      liveChannel = (r?.channel || "").toLowerCase();
+    }
+  } catch { /* no content script on this tab (e.g. not YouTube/Kick) */ }
+  const activeCh = liveChannel || (p._activeChannel || "").toLowerCase();
+  const perCh = activeCh ? p.highlightThresholds?.[activeCh] : undefined;
+  if (activeCh) {
+    $("#highlightThreshold").value = Math.max(3, (perCh ?? p.highlightThreshold ?? 5));
+    $("#thresholdLabel").textContent = `Emote highlight threshold for ${activeCh} (unique viewers)`;
+    $("#highlightThresholdHint").textContent = perCh != null
+      ? `per-channel · "Save" sets ${activeCh}, "Set global" sets the default (${p.highlightThreshold ?? 5})`
+      : `using global default (${p.highlightThreshold ?? 5}) · "Save" sets ${activeCh}, "Set global" sets the default`;
+  } else {
+    $("#highlightThreshold").value = Math.max(3, p.highlightThreshold ?? 5);
+    $("#thresholdLabel").textContent = "Emote highlight threshold (unique viewers)";
+    $("#highlightThresholdHint").textContent = "no channel active — editing the global default";
+  }
+  // Per-channel window: same pattern as the threshold.
+  const perWin = activeCh ? p.highlightWindows?.[activeCh] : undefined;
+  if (activeCh) {
+    $("#highlightWindow").value = Math.max(2, Math.min(120, (perWin ?? p.highlightWindowSec ?? 12)));
+    $("#windowLabel").textContent = `Emote highlight window for ${activeCh} (seconds)`;
+    $("#highlightWindowHint").textContent = perWin != null
+      ? `per-channel · "Save" sets ${activeCh}, "Set global" sets the default (${p.highlightWindowSec ?? 12}s)`
+      : `using global default (${p.highlightWindowSec ?? 12}s) · "Save" sets ${activeCh}, "Set global" sets the default`;
+  } else {
+    $("#highlightWindow").value = Math.max(2, Math.min(120, p.highlightWindowSec ?? 12));
+    $("#windowLabel").textContent = "Emote highlight window (seconds)";
+    $("#highlightWindowHint").textContent = "no channel active — editing the global default";
+  }
   $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
   $("#highlightColor").value = p.highlightColor || "#b388ff";
+  $("#highlightColorAppearance").value = p.highlightColor || "#b388ff";
+  $("#highlightPersistEmotes").checked = p.highlightPersistEmotes !== false;
+  $("#highlightPersistDensity").checked = p.highlightPersistDensity !== false;
   $("#emote7tv").checked = p.emote7tv !== false;
   $("#emoteBttv").checked = p.emoteBttv !== false;
   $("#emoteFfz").checked = p.emoteFfz !== false;
   $("#textStyle").value = p.textStyle || "none";
   $("#boldText").checked = p.boldText === true;
-  syncHighlightGating(p.highlightTimeline === true);
+  syncHighlightGating();
 }
-// Emote highlights only make sense when the wave is on.
-function syncHighlightGating(timelineOn) {
-  for (const sel of ["#highlightEnabled", "#highlightAnchorLive"]) {
+// Emote highlights can run independently of the chat-activity wave (the markers just render with no
+// wave drawn behind them). Each dependent option is gated on whichever layer it actually affects.
+function syncHighlightGating() {
+  const timelineOn = $("#highlightTimeline").checked;
+  const emotesOn = $("#highlightEnabled").checked;
+  const gate = (sel, on) => {
     const dep = $(sel);
-    dep.disabled = !timelineOn;
-    dep.closest("label").style.opacity = timelineOn ? "" : "0.5";
-  }
+    dep.disabled = !on;
+    dep.closest("label").style.opacity = on ? "" : "0.5";
+  };
+  gate("#highlightAnchorLive", timelineOn || emotesOn); // shifts both layers into the past
+  gate("#highlightPersistDensity", timelineOn);          // wave only
+  gate("#highlightPersistEmotes", emotesOn);             // emote markers only
 }
 
 // ---------- General ----------
@@ -175,6 +246,9 @@ async function initSiteCard() {
   const sel = $("#siteMode");
   const isYouTube = activeHost ? /(^|\.)youtube\.com$/.test(activeHost) : false;
   $("#ytLoadOnCard").style.display = isYouTube ? "" : "none";
+  // Mappings are editable from ANY site (not just youtube.com / kick.com), so both editors show always.
+  $("#ytMappingsCard").style.display = "";
+  $("#kickMappingsCard").style.display = "";
   if (!activeHost || !/^https?:/.test(activeTab?.url || "")) {
     card.style.display = "none"; sel.disabled = true; return;
   }
@@ -214,6 +288,17 @@ $("#saveMappings").addEventListener("click", async () => {
   msg.className = errors.length ? "err" : "hint";
   setTimeout(() => { msg.textContent = ""; msg.className = "hint"; }, 3000);
 });
+$("#saveKickMappings").addEventListener("click", async () => {
+  const { mappings, errors } = parseMappings($("#kickMappings").value);
+  await setPrefs({ kickMappings: mappings });
+  const count = Object.keys(mappings).length;
+  const msg = $("#kickMappingsMsg");
+  msg.textContent = errors.length
+    ? `Saved ${count}. Skipped: ${errors.join("; ")}`
+    : `Saved ${count} mapping${count === 1 ? "" : "s"} ✓`;
+  msg.className = errors.length ? "err" : "hint";
+  setTimeout(() => { msg.textContent = ""; msg.className = "hint"; }, 3000);
+});
 
 // ---------- Chat ----------
 $("#saveDelay").addEventListener("click", async () => {
@@ -235,20 +320,69 @@ $("#saveMaxMessages").addEventListener("click", async () => {
   flash($("#saveMaxMessages"));
 });
 $("#hideDeleted").addEventListener("change", async (e) => { await setPrefs({ hideDeleted: e.target.checked }); });
+$("#showViewers").addEventListener("change", async (e) => { await setPrefs({ showViewers: e.target.checked }); });
 $("#highlightTimeline").addEventListener("change", async (e) => {
-  const on = e.target.checked;
-  await setPrefs(on ? { highlightTimeline: true } : { highlightTimeline: false, highlightEnabled: false });
-  if (!on) $("#highlightEnabled").checked = false;
-  syncHighlightGating(on);
+  await setPrefs({ highlightTimeline: e.target.checked });
+  syncHighlightGating();
 });
-$("#highlightEnabled").addEventListener("change", async (e) => { await setPrefs({ highlightEnabled: e.target.checked }); });
+$("#highlightEnabled").addEventListener("change", async (e) => {
+  await setPrefs({ highlightEnabled: e.target.checked });
+  syncHighlightGating();
+});
 $("#highlightAnchorLive").addEventListener("change", async (e) => { await setPrefs({ highlightAnchorLive: e.target.checked }); });
-$("#highlightColor").addEventListener("input", async (e) => { await setPrefs({ highlightColor: e.target.value }); });
+$("#highlightPersistEmotes").addEventListener("change", async (e) => { await setPrefs({ highlightPersistEmotes: e.target.checked }); });
+$("#highlightPersistDensity").addEventListener("change", async (e) => { await setPrefs({ highlightPersistDensity: e.target.checked }); });
+$("#highlightColor").addEventListener("input", async (e) => {
+  $("#highlightColorAppearance").value = e.target.value;
+  await setPrefs({ highlightColor: e.target.value });
+});
+$("#highlightColorAppearance").addEventListener("input", async (e) => {
+  $("#highlightColor").value = e.target.value;
+  await setPrefs({ highlightColor: e.target.value });
+});
 $("#saveHighlightThreshold").addEventListener("click", async () => {
+  const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 5));
+  const p = await getPrefs();
+  const ch = (p._activeChannel || "").toLowerCase();
+  if (ch) {
+    const thresholds = { ...(p.highlightThresholds || {}), [ch]: v };
+    await setPrefs({ highlightThresholds: thresholds });
+    $("#highlightThresholdHint").textContent = `per-channel · "Save" sets ${ch}, "Set global" sets the default (${p.highlightThreshold ?? 5})`;
+  } else {
+    await setPrefs({ highlightThreshold: v });
+  }
+  $("#highlightThreshold").value = v;
+  flash($("#saveHighlightThreshold"));
+});
+// Always writes the global/default threshold (used by any channel without its own override).
+$("#saveGlobalThreshold").addEventListener("click", async () => {
   const v = Math.max(3, Math.min(100000, parseInt($("#highlightThreshold").value, 10) || 5));
   await setPrefs({ highlightThreshold: v });
   $("#highlightThreshold").value = v;
-  flash($("#saveHighlightThreshold"));
+  flash($("#saveGlobalThreshold"));
+  loadAllFields(); // refresh the hint to reflect the new global default
+});
+$("#saveHighlightWindow").addEventListener("click", async () => {
+  const v = Math.max(2, Math.min(120, parseInt($("#highlightWindow").value, 10) || 12));
+  const p = await getPrefs();
+  const ch = (p._activeChannel || "").toLowerCase();
+  if (ch) {
+    const windows = { ...(p.highlightWindows || {}), [ch]: v };
+    await setPrefs({ highlightWindows: windows });
+    $("#highlightWindowHint").textContent = `per-channel · "Save" sets ${ch}, "Set global" sets the default (${p.highlightWindowSec ?? 12}s)`;
+  } else {
+    await setPrefs({ highlightWindowSec: v });
+  }
+  $("#highlightWindow").value = v;
+  flash($("#saveHighlightWindow"));
+});
+// Always writes the global/default window (used by any channel without its own override).
+$("#saveGlobalWindow").addEventListener("click", async () => {
+  const v = Math.max(2, Math.min(120, parseInt($("#highlightWindow").value, 10) || 12));
+  await setPrefs({ highlightWindowSec: v });
+  $("#highlightWindow").value = v;
+  flash($("#saveGlobalWindow"));
+  loadAllFields(); // refresh the hint to reflect the new global default
 });
 $("#saveHighlightOffset").addEventListener("click", async () => {
   const v = Math.max(0, Math.min(120, parseInt($("#highlightOffset").value, 10) || 0));
@@ -261,7 +395,7 @@ $("#emoteBttv").addEventListener("change", async (e) => { await setPrefs({ emote
 $("#emoteFfz").addEventListener("change", async (e) => { await setPrefs({ emoteFfz: e.target.checked }); });
 $("#clearHighlightCache").addEventListener("click", async () => {
   const all = await chrome.storage.local.get(null);
-  const keys = Object.keys(all).filter((k) => k.startsWith("meridian.highlights."));
+  const keys = Object.keys(all).filter((k) => k.startsWith("meridian.highlights.") || k.startsWith("meridian.density."));
   if (keys.length) await chrome.storage.local.remove(keys);
   const msg = $("#clearHighlightMsg");
   msg.textContent = `Cleared ${keys.length} cached timeline${keys.length === 1 ? "" : "s"} ✓`;
@@ -283,12 +417,14 @@ $("#saveBlockedWords").addEventListener("click", async () => {
 $("#opacity").addEventListener("input", async (e) => {
   const pct = parseInt(e.target.value, 10);
   $("#opacityVal").textContent = `${pct}%`;
+  setRangeFill(e.target);
   await setPrefs({ opacity: pct / 100 });
 });
 $("#blurEnabled").addEventListener("change", async (e) => { await setPrefs({ blurEnabled: e.target.checked }); });
 $("#blurRadius").addEventListener("input", async (e) => {
   const v = parseInt(e.target.value, 10);
   $("#blurRadiusVal").textContent = `${v}px`;
+  setRangeFill(e.target);
   await setPrefs({ blurRadius: v });
 });
 $("#bgEnabled").addEventListener("change", async (e) => { await setPrefs({ bgEnabled: e.target.checked }); });
@@ -329,6 +465,40 @@ function bindHotkey(prefKey, inputSel, captureSel, clearSel) {
 }
 bindHotkey("hotkeyToggle", "#hotkeyToggle", "#hotkeyToggleCapture", "#hotkeyToggleClear");
 bindHotkey("hotkeyFocus",  "#hotkeyFocus",  "#hotkeyFocusCapture",  "#hotkeyFocusClear");
+
+// Like comboFromEvent but allows a BARE single key (and a lone modifier) — for the hold-to-pause
+// hotkey. Must match content.js's hotkeySpecFromEvent so saved specs compare equal at runtime.
+function hotkeySpecFromEvent(e) {
+  const k = e.key;
+  if (["Control","Alt","Shift","Meta"].includes(k)) return k; // lone modifier
+  const parts = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.metaKey) parts.push("Meta");
+  const named = k === " " ? "Space" : (k.length === 1 ? k.toUpperCase() : k);
+  parts.push(named);
+  return parts.join("+");
+}
+// Capture for the hold hotkey: a non-modifier key (alone or with modifiers) finalizes on keydown; a
+// lone modifier finalizes on keyup, so "hold Alt" can be captured without a follow-up key.
+function bindHoldHotkey(prefKey, inputSel, captureSel, clearSel) {
+  const input = $(inputSel);
+  let capturing = false, pendingMod = null;
+  const finalize = async (spec) => { capturing = false; pendingMod = null; input.value = spec; await setPrefs({ [prefKey]: spec }); };
+  $(captureSel).addEventListener("click", () => { capturing = true; pendingMod = null; input.value = "(press a key…)"; input.focus(); });
+  input.addEventListener("keydown", (e) => {
+    if (!capturing) { e.preventDefault(); return; }
+    e.preventDefault();
+    if (["Control","Alt","Shift","Meta"].includes(e.key)) { pendingMod = e.key; input.value = `(${e.key}…)`; return; }
+    finalize(hotkeySpecFromEvent(e));
+  });
+  input.addEventListener("keyup", (e) => {
+    if (capturing && pendingMod && e.key === pendingMod) finalize(pendingMod);
+  });
+  $(clearSel).addEventListener("click", async () => { capturing = false; pendingMod = null; input.value = ""; await setPrefs({ [prefKey]: "" }); });
+}
+bindHoldHotkey("hotkeyPauseScroll", "#hotkeyPauseScroll", "#hotkeyPauseScrollCapture", "#hotkeyPauseScrollClear");
 function comboFromEvent(e) {
   const parts = [];
   if (e.ctrlKey) parts.push("Ctrl");
@@ -341,6 +511,67 @@ function comboFromEvent(e) {
   parts.push(k.length === 1 ? k.toUpperCase() : k);
   return parts.join("+");
 }
+
+// ---------- Reset / clear data ----------
+function resetMsg(sel, text) {
+  const el = $(sel);
+  el.textContent = text;
+  setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, 2500);
+}
+async function removeByPrefix(...prefixes) {
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter((k) => prefixes.some((p) => k.startsWith(p)));
+  if (keys.length) await chrome.storage.local.remove(keys);
+  return keys.length;
+}
+$("#resetDisconnect").addEventListener("click", async () => {
+  await send("AUTH_DISCONNECT");
+  $("#authMsg").textContent = "";
+  refreshStatus();
+  resetMsg("#resetDisconnectMsg", "Disconnected ✓");
+});
+$("#resetMappings").addEventListener("click", async () => {
+  await setPrefs({ mappings: { ...DEFAULT_MAPPINGS }, kickMappings: { ...DEFAULT_KICK_MAPPINGS } });
+  loadAllFields();
+  resetMsg("#resetMappingsMsg", "Mappings reset ✓");
+});
+$("#resetThresholds").addEventListener("click", async () => {
+  await setPrefs({ highlightThresholds: {}, highlightWindows: {} });
+  resetMsg("#resetThresholdsMsg", "Channel overrides cleared ✓");
+});
+$("#resetEmoteMarkers").addEventListener("click", async () => {
+  const n = await removeByPrefix("meridian.highlights.");
+  resetMsg("#resetEmoteMarkersMsg", `Cleared ${n} marker set${n === 1 ? "" : "s"} ✓`);
+});
+$("#resetDensity").addEventListener("click", async () => {
+  const n = await removeByPrefix("meridian.density.");
+  resetMsg("#resetDensityMsg", `Cleared ${n} timeline${n === 1 ? "" : "s"} ✓`);
+});
+// Reset everything is destructive + hard to reverse — require a second confirming click.
+let resetAllArmed = false, resetAllTimer = null;
+function disarmResetAll() {
+  resetAllArmed = false;
+  if (resetAllTimer) { clearTimeout(resetAllTimer); resetAllTimer = null; }
+  const btn = $("#resetAll");
+  btn.classList.remove("armed");
+  btn.textContent = "Reset extension";
+}
+$("#resetAll").addEventListener("click", async () => {
+  if (!resetAllArmed) {
+    resetAllArmed = true;
+    const btn = $("#resetAll");
+    btn.classList.add("armed");
+    btn.textContent = "Click again to confirm";
+    resetAllTimer = setTimeout(disarmResetAll, 4000);
+    return;
+  }
+  disarmResetAll();
+  await chrome.storage.local.clear();
+  await loadAllFields();        // repaint the popup with defaults
+  refreshStatus();
+  if (activeTab?.id) chrome.tabs.reload(activeTab.id); // re-init the content script from defaults
+  resetMsg("#resetAllMsg", "Everything reset ✓");
+});
 
 // ---------- init ----------
 (async () => {

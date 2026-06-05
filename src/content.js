@@ -21,6 +21,11 @@
     HighlightEngine = class { ingest(){} prune(){} reset(){} };
     DensityTracker = class { add(){} reset(){} resolutionFor(){ return 10; } series(){ return []; } };
   }
+  // Default channel mappings live in a shared module so the popup uses the exact same data.
+  let DEFAULT_MAPPINGS = {}, DEFAULT_KICK_MAPPINGS = {};
+  try {
+    ({ DEFAULT_MAPPINGS, DEFAULT_KICK_MAPPINGS } = await import(chrome.runtime.getURL("src/mappings.js")));
+  } catch { /* stale content script — fall back to empty defaults */ }
 
   const PREFS_KEY = "meridian.prefs";
   function defaultRect() {
@@ -35,21 +40,10 @@
       height
     };
   }
-  // Default YouTube handle / Kick slug → Twitch channel mappings (one shared map; keys are the
-  // lower-cased handle/slug, values the Twitch login). Seeds esports + a few popular channels.
-  const DEFAULT_MAPPINGS = {
-    eslcs: "eslcs",
-    pgl: "pgl",
-    blastpremier: "blastpremier",
-    starladder_cs: "starladder_cs_en",
-    starladder: "starladder_cs_en",
-    valorantesports: "valorant",
-    tenz: "tenz",
-    ohnepixel: "ohnepixel"
-  };
   const defaults = {
     channel: "",
     mappings: { ...DEFAULT_MAPPINGS },
+    kickMappings: { ...DEFAULT_KICK_MAPPINGS },
     overrideChannel: "",
     rect: null,                  // computed on first load
     hidden: false,
@@ -58,6 +52,7 @@
     autoscroll: true,            // always on (no longer user-toggleable)
     hotkeyToggle: "",            // toggle chat visibility (= × / chat bubble)
     hotkeyFocus: "",             // show chat + focus the input
+    hotkeyPauseScroll: "",       // HOLD to pause autoscroll (single bare key allowed)
     blockedWords: [],
     hideDeleted: true,
     opacity: 0.51,
@@ -74,16 +69,22 @@
     sites: {},                   // per-host: { "<host>": { mode, hidden } } (hidden = transient, toggled by the bubble)
     highlightTimeline: true,     // master: msgs/sec density wave on the live seekbar
     highlightEnabled: true,      // emote-surge markers on the wave (requires highlightTimeline)
-    highlightThreshold: 5,       // fixed: unique viewers per ~12 s window (floor 3)
+    highlightThreshold: 5,       // global default: unique viewers per window (floor 3)
+    highlightThresholds: {},     // per-channel overrides: { "channel": threshold }
+    highlightWindowSec: 12,      // global default: rolling window the unique-viewer count is measured over (2..120)
+    highlightWindows: {},        // per-channel window overrides: { "channel": seconds }
     highlightAnchorLive: true,   // anchor highlights at the live edge (scroll left) vs. the viewer's seek position
     highlightOffsetSec: 5,       // shift highlights this many sec into the past (human reaction time)
     highlightColor: "#b388ff",   // wave + emote-marker accent color (light purple)
+    highlightPersistEmotes: true,  // keep emote highlights across sessions + replay them on the VOD
+    highlightPersistDensity: true, // keep the intensity-timeline wave + replay it on the VOD
     emote7tv: true,              // 3rd-party emote providers (each toggleable; all on by default)
     emoteBttv: true,
     emoteFfz: true,
     textStyle: "shadow",         // chat text legibility: "none" | "shadow" | "outline"
     boldText: true,              // message body weight (names are always one step heavier)
-    ytLoadOn: "live"             // YouTube: load chat on "live" (livestreams only) | "all" (any video)
+    ytLoadOn: "live",            // YouTube: load chat on "live" (livestreams only) | "all" (any video)
+    showViewers: false           // show the channel's live Twitch viewer count (OAuth only; polled ~90s)
   };
 
   // Chatters for @-mention autocomplete (lcLogin → displayName). Seeded from the IRC
@@ -132,6 +133,7 @@
     // We overlay our panel inside it, so we never restructure YouTube's chat layout.
     findDockAnchor: () => document.querySelector("ytd-live-chat-frame#chat"),
     nativeChatLabel: "YouTube",
+    brandColor: "#FF0033",       // source-badge dot color on the docked tab
     // Timeline highlights (live DVR seekbar). Live detection: the player only renders a
     // `.ytp-live-badge` for live content — `video.duration` is unreliable (finite even live).
     hasTimeline: true,
@@ -200,6 +202,7 @@
     // + the messages/input body). We overlay our panel inside it.
     findDockAnchor: () => document.querySelector("#channel-chatroom"),
     nativeChatLabel: "Kick",
+    brandColor: "#53FC18",       // source-badge dot color on the docked tab
     // Kick live has no usable DVR timeline, so the highlight wave/emotes are unsupported here.
     hasTimeline: false,
     isLive: () => true,
@@ -303,10 +306,11 @@
     <div class="meridian-bg"></div>
     <div class="meridian-header">
       <span class="meridian-channel-field">
-        <span class="meridian-channel-prefix">twitch.tv/</span>
-        <input class="meridian-channel" placeholder="channel name" spellcheck="false" />
-        <button class="meridian-channel-reset" data-act="auto" title="Reset to auto channel" hidden>⟲</button>
-        <button class="meridian-channel-follow" data-act="follow" title="Follow on Twitch" hidden><svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
+        <span class="meridian-channel-scroll">
+          <span class="meridian-channel-prefix">twitch.tv/</span>
+          <input class="meridian-channel" placeholder="channel name" spellcheck="false" />
+        </span>
+        <button class="meridian-channel-follow" data-act="follow" title="Follow on Twitch" hidden><svg viewBox="0 0 24 24" width="10" height="10"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
       </span>
       <div class="meridian-delay" title="Chat delay (seconds)">
         <span class="meridian-delay-icon">⏱</span>
@@ -319,6 +323,20 @@
       <button class="meridian-btn" data-act="hide" title="Hide">×</button>
     </div>
     <div class="meridian-status"></div>
+    <div class="meridian-banner meridian-conn-banner">
+      <span class="meridian-banner-dot"></span>
+      <span class="meridian-banner-text"></span>
+      <span class="meridian-banner-shimmer"></span>
+    </div>
+    <div class="meridian-banner meridian-delay-banner">
+      <span class="meridian-banner-dot"></span>
+      <span class="meridian-banner-text"></span>
+      <span class="meridian-banner-shimmer"></span>
+    </div>
+    <div class="meridian-viewers" title="Live viewers on Twitch">
+      <svg class="meridian-viewers-eye" viewBox="0 0 24 24" width="11" height="11" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span class="meridian-viewers-count"></span>
+    </div>
     <div class="meridian-messages"></div>
     <button class="meridian-resume" title="Resume autoscroll"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><polygon points="6 4 20 12 6 20"></polygon></svg>Autoscroll</button>
     <div class="meridian-suggest"></div>
@@ -342,10 +360,15 @@
   const els = {
     header: root.querySelector(".meridian-header"),
     channel: root.querySelector(".meridian-channel"),
-    channelReset: root.querySelector(".meridian-channel-reset"),
     follow: root.querySelector(".meridian-channel-follow"),
     delayVal: root.querySelector(".meridian-delay-val"),
     status: root.querySelector(".meridian-status"),
+    delayBanner: root.querySelector(".meridian-delay-banner"),
+    delayBannerText: root.querySelector(".meridian-delay-banner .meridian-banner-text"),
+    connBanner: root.querySelector(".meridian-conn-banner"),
+    connBannerText: root.querySelector(".meridian-conn-banner .meridian-banner-text"),
+    viewers: root.querySelector(".meridian-viewers"),
+    viewersCount: root.querySelector(".meridian-viewers-count"),
     messages: root.querySelector(".meridian-messages"),
     input: root.querySelector(".meridian-input"),
     send: root.querySelector(".meridian-send"),
@@ -445,15 +468,6 @@
     e.stopPropagation();
     reconnect();
   });
-  els.channelReset.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    if (!prefs.overrideChannel) return;
-    prefs.overrideChannel = "";
-    await savePrefs();
-    updateChannelInputFromPrefs();
-    syncChannel();
-  });
   // Heart (signed-in only): opens the channel on twitch.tv in a new tab, where the user can
   // follow/unfollow. (Twitch removed the programmatic follow API in 2021.)
   els.follow.addEventListener("click", (e) => {
@@ -481,10 +495,22 @@
   // --- channel input (twitch.tv/<channel> with × reset; auto-fills from mapping) ---
   // keydown handled in the document-level capture listener (search "isOurInput").
   els.channel.addEventListener("blur", commitChannelInput);
-  els.channel.addEventListener("input", updateResetVisibility);
+  els.channel.addEventListener("input", updateHeart);
+  // The input fills the field, so clicking beside the name still edits. The `twitch.tv/` prefix and
+  // the heart strip are NOT part of the input: they inherit the header's grab cursor and start a
+  // drag (the prefix is uneditable, by design).
+  // Rest scrolled to the LEFT (showing `twitch.tv/` + the start of the name) by default and whenever
+  // the field loses focus. While focused/typing the browser keeps the caret in view natively.
+  function scrollChannelToStart() {
+    els.channel.scrollLeft = 0;             // input scrolls internally now (fills the field)
+    const f = els.channel.parentElement;
+    if (f) f.scrollLeft = 0;
+  }
+  els.channel.addEventListener("blur", scrollChannelToStart);
 
   function autoChannel() {
-    if (detectedHandle && prefs.mappings?.[detectedHandle]) return prefs.mappings[detectedHandle];
+    const map = SITE === kickAdapter ? prefs.kickMappings : prefs.mappings;
+    if (detectedHandle && map?.[detectedHandle]) return map[detectedHandle];
     return "";
   }
   function resolveChannel() {
@@ -506,22 +532,14 @@
     if (document.activeElement === els.channel) { updateChannelControls(); return; }
     els.channel.value = resolveChannel();
     updateChannelControls();
+    // Default to showing the start (`twitch.tv/<name>…`), not the tail.
+    scrollChannelToStart();
   }
   function isSignedIn() { return currentAuth?.kind === "oauth"; }
-  // The heart (signed-in only) takes the reset icon's spot. Reset still works when signed out.
   function updateChannelControls() {
-    const ch = resolveChannel();
-    const showHeart = isSignedIn() && !!ch;
+    const showHeart = isSignedIn();
     els.follow.hidden = !showHeart;
-    updateResetVisibility(showHeart);
     updateHeart();
-  }
-  function updateResetVisibility(suppress) {
-    if (suppress) { els.channelReset.hidden = true; return; }
-    const cur = els.channel.value.trim().toLowerCase();
-    const auto = autoChannel();
-    const isOverride = cur && cur !== auto;
-    els.channelReset.hidden = !isOverride && !prefs.overrideChannel;
   }
   function updateHeart() {
     const ch = resolveChannel();
@@ -822,6 +840,47 @@
     if (m.self || (prefs.chatDelaySec || 0) <= 0) { scheduleRender(m); return; }
     queue.push(m);
     schedulePump();
+    updateDelayBanner();
+  }
+  // --- status banners (connection + delay buffering) ---
+  // Both float at the top of the messages area (inside `root` → shown in overlay AND docked mode),
+  // same pill style, pulsing dot + sliding shimmer. The connection banner takes priority over the
+  // delay banner (you can't be buffering delayed chat before you've connected).
+  let connState = "connecting";   // connecting | connected | joined | disconnected | error
+  let delayPrimed = false;        // true once the first delayed message has been shown this session
+  let delayTicker = null;
+  function startDelayTicker() { if (!delayTicker) delayTicker = setInterval(updateDelayBanner, 250); }
+  function stopDelayTicker() { if (delayTicker) { clearInterval(delayTicker); delayTicker = null; } }
+  function updateConnBanner() {
+    const connecting = connState === "connecting";
+    const failed = connState === "disconnected" || connState === "error";
+    const show = connecting || failed;
+    els.connBanner.classList.toggle("show", show);
+    els.connBanner.classList.toggle("error", failed);
+    if (show) {
+      els.connBannerText.textContent = connecting
+        ? "Connecting to Twitch chat…"
+        : connState === "error" ? "Connection error — reconnecting…" : "Disconnected — reconnecting…";
+    }
+    updateDelayBanner();          // delay banner is suppressed while the connection banner shows
+  }
+  function updateDelayBanner() {
+    const delay = prefs.chatDelaySec || 0;
+    const head = queue[0];
+    // Buffering indicator only: show while the delay is holding the FIRST message(s) back, and
+    // hide for good once a delayed message has actually appeared (delayPrimed). Re-armed on
+    // (re)connect / channel switch / delay change.
+    const connShowing = els.connBanner.classList.contains("show");
+    const waiting = delay > 0 && !!head && !delayPrimed && !connShowing;
+    els.delayBanner.classList.toggle("show", waiting);
+    // Shift the messages down so the (solid) banner never overlaps chat text.
+    root.classList.toggle("meridian-has-banner", waiting || connShowing);
+    if (!waiting) { stopDelayTicker(); return; }
+    const remain = Math.max(0, Math.ceil((head.ts + delay * 1000 - Date.now()) / 1000));
+    els.delayBannerText.textContent = remain > 0
+      ? `Buffering — first delayed message in ${remain}s`
+      : `Buffering delayed chat…`;
+    startDelayTicker();
   }
   function schedulePump() {
     if (pumpTimer) return;
@@ -832,15 +891,18 @@
   }
   function flushQueue() {
     const cutoff = Date.now() - (prefs.chatDelaySec || 0) * 1000;
-    while (queue.length && queue[0].ts <= cutoff) scheduleRender(queue.shift());
+    while (queue.length && queue[0].ts <= cutoff) { scheduleRender(queue.shift()); delayPrimed = true; }
     schedulePump();
+    updateDelayBanner();
   }
   async function setDelay(sec) {
     prefs.chatDelaySec = sec;
     await savePrefs();
     applyDelayDisplay();
     if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
+    delayPrimed = false;          // re-arm the buffering indicator for the new delay
     flushQueue();
+    updateDelayBanner();
   }
   function applyDelayDisplay() {
     if (document.activeElement === els.delayVal) return;
@@ -898,7 +960,7 @@
         new Promise((res) => setTimeout(() => res(null), 3000))
       ]);
       if (!pageActive) return;        // page went inactive while we awaited
-      if (!resp?.ok || !resp.auth) { setStatus("connecting…"); return; }
+      if (!resp?.ok || !resp.auth) { connState = "connecting"; setStatus("connecting…"); updateConnBanner(); return; }
       currentAuth = resp.auth;
       emoteReg = new EmoteRegistry({
         getAuth: () => currentAuth,
@@ -914,7 +976,7 @@
         displayName: currentAuth.displayName || currentAuth.login,
         anonymous: currentAuth.kind === "anonymous",
         onMessage: enqueue,
-        onStatus: (s) => setStatus(formatStatus(s))
+        onStatus: (s) => { connState = s.state; setStatus(formatStatus(s)); updateConnBanner(); }
       });
       irc.connect();
       syncChannel();
@@ -939,9 +1001,44 @@
   }
   function disconnectIRC() {
     if (irc) { irc.disconnect(); irc = null; lastJoined = ""; }
+    chrome.storage.local.set({ [PREFS_KEY]: { ...prefs, _activeChannel: "" } }).catch(() => {});
     // clear pending delay queue so it doesn't dump after reconnect
     queue.length = 0;
     if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
+    delayPrimed = false;          // re-arm the buffering indicator for the next connection
+    updateDelayBanner();
+    stopViewerPoll(); setViewers(null);
+  }
+
+  // --- live Twitch viewer count (OAuth only, opt-in) ---
+  let viewerTimer = null;
+  function viewersEnabled() { return prefs.showViewers === true && currentAuth?.kind === "oauth"; }
+  function formatViewers(n) {
+    if (n == null) return "";
+    if (n < 1000) return String(n);          // 1 decimal place once past 1000 (24800 → "24.8K")
+    if (n < 1e6) return (n / 1e3).toFixed(1) + "K";
+    return (n / 1e6).toFixed(1) + "M";
+  }
+  function setViewers(n) {
+    if (n == null) { els.viewers.classList.remove("show"); return; }
+    els.viewersCount.textContent = formatViewers(n);
+    els.viewers.classList.add("show");
+  }
+  async function fetchViewers() {
+    if (!viewersEnabled() || !lastJoined) { setViewers(null); return; }
+    if (!chrome.runtime?.id) { stopViewerPoll(); return; } // content script orphaned by an extension reload
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "STREAM_INFO", login: lastJoined });
+      if (!viewersEnabled()) return;                  // toggled off mid-flight
+      setViewers(r?.ok && r.live ? r.viewers : null); // hide when offline / failed
+    } catch { setViewers(null); }
+  }
+  function stopViewerPoll() { if (viewerTimer) { clearInterval(viewerTimer); viewerTimer = null; } }
+  function startViewerPoll() {
+    stopViewerPoll();
+    if (!viewersEnabled()) { setViewers(null); return; }
+    fetchViewers();                                   // immediate, then every 90 s
+    viewerTimer = setInterval(fetchViewers, 90000);
   }
 
   let lastJoined = "";
@@ -952,10 +1049,25 @@
       irc.join(target);
       lastJoined = target;
       chatters.clear(); // reset suggestions for the new channel (NAMES will reseed)
+      queue.length = 0; delayPrimed = false; updateDelayBanner(); // re-arm buffering for the new channel
+      setViewers(null); startViewerPoll();            // refetch viewer count for the new channel
+      applyHighlightWindow();                          // pick up this channel's per-channel window
       emoteReg?.loadForChannel(target).catch(() => {});
+      // Expose the active channel so the popup can show per-channel settings.
+      prefs._activeChannel = target;
+      chrome.storage.local.set({ [PREFS_KEY]: { ...prefs, _activeChannel: target } }).catch(() => {});
     }
     updateChannelControls();
   }
+
+  // The popup asks the *active tab* for its live channel (more reliable than the global
+  // `_activeChannel` storage key, which goes stale across tabs) to scope per-channel settings.
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type === "GET_ACTIVE_CHANNEL") {
+      sendResponse({ channel: (lastJoined || resolveChannel() || "").toLowerCase() });
+      return true;
+    }
+  });
 
   // --- storage changes ---
   chrome.storage.onChanged.addListener(async (changes, area) => {
@@ -965,7 +1077,7 @@
     }
     // Highlight cache cleared from the popup — drop in-memory markers for this video.
     if (highlightsKey && changes[highlightsKey] && changes[highlightsKey].newValue == null) {
-      highlights.clear(); hlEngine.reset(); renderEmotes();
+      highlights.clear(); hlEngine.reset(); markEmotesDirty(); renderEmotes();
     }
     if (changes[PREFS_KEY]) {
       const next = { ...defaults, ...(changes[PREFS_KEY].newValue || {}) };
@@ -974,6 +1086,7 @@
       if (next.extensionEnabled === false) { location.reload(); return; }
       const channelInputsChanged = (next.channel !== prefs.channel)
         || JSON.stringify(next.mappings) !== JSON.stringify(prefs.mappings)
+        || JSON.stringify(next.kickMappings) !== JSON.stringify(prefs.kickMappings)
         || next.overrideChannel !== prefs.overrideChannel;
       const appearanceChanged = next.opacity !== prefs.opacity
         || next.fontSize !== prefs.fontSize
@@ -991,10 +1104,17 @@
       const loadOnChanged = next.ytLoadOn !== prefs.ytLoadOn;
       const prevMode = effectiveMode();
       const highlightChanged = next.highlightEnabled !== prefs.highlightEnabled
-        || next.highlightTimeline !== prefs.highlightTimeline;
+        || next.highlightTimeline !== prefs.highlightTimeline
+        || next.highlightPersistEmotes !== prefs.highlightPersistEmotes
+        || next.highlightPersistDensity !== prefs.highlightPersistDensity;
       const colorChanged = next.highlightColor !== prefs.highlightColor;
+      const viewersChanged = next.showViewers !== prefs.showViewers;
+      const windowChanged = next.highlightWindowSec !== prefs.highlightWindowSec
+        || JSON.stringify(next.highlightWindows) !== JSON.stringify(prefs.highlightWindows);
       prefs = next;
       const modeChanged = effectiveMode() !== prevMode;
+      if (viewersChanged) startViewerPoll(); // start polling, or stop + hide when turned off
+      if (windowChanged) applyHighlightWindow();
       if (channelInputsChanged) { syncChannel(); updateChannelInputFromPrefs(); }
       if (appearanceChanged) applyAppearance();
       if (delayChanged) { applyDelayDisplay(); flushQueue(); }
@@ -1009,6 +1129,7 @@
 
   // --- YouTube handle detection ---
   function refreshDetectedHandle() {
+    if (!chrome.runtime?.id) return; // content script orphaned by an extension reload — go quiet
     // Mount/unmount as the SPA navigates between video pages and the feed.
     syncPageActive();
     if (!pageActive) return;
@@ -1017,7 +1138,13 @@
     // reconnect. The `connecting` guard inside ensureConnected makes overlapping calls a no-op.
     if (!irc && effectiveMode() !== "hidden") ensureConnected();
     const h = SITE.detectHandle();
-    if (h !== detectedHandle) { detectedHandle = h; syncChannel(); }
+    if (h !== detectedHandle) {
+      detectedHandle = h;
+      // A manual channel override is scoped to the page it was typed on — navigating to a
+      // different stream must fall back to that channel's mapping, not carry the old override.
+      if (prefs.overrideChannel) { prefs.overrideChannel = ""; savePrefs(); }
+      syncChannel();
+    }
     else updateChannelInputFromPrefs();
     // Effective mode can flip on its own in "auto" (the chat frame loading/unloading), so re-run
     // the full dispatcher when it differs from what we last applied.
@@ -1054,11 +1181,20 @@
         (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => {});
         return;
       }
-      // In "auto" the effective mode flips (overlay⇄docked) with fullscreen — re-apply fully.
-      if (siteMode() === "auto") { applyMode(); return; }
-      if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
+      // Our re-layout (dock/undock + player resize nudge) is deferred a frame so it runs AFTER the
+      // browser's fullscreen transition instead of competing with it — keeps the toggle smoother.
+      requestAnimationFrame(() => {
+        // The seekbar resizes with fullscreen → FP changes → regroup the emote markers promptly
+        // (the 2 s loop would catch the width change too, just up to 2 s later).
+        markEmotesDirty(); scheduleEmoteRender();
+        // In "auto" the effective mode flips (overlay⇄docked) with fullscreen — re-apply fully.
+        if (siteMode() === "auto") { applyMode(); return; }
+        if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
+      });
     })
   );
+  // Window resize also changes the seekbar width → regroup the emote markers (debounced via rAF).
+  window.addEventListener("resize", () => { markEmotesDirty(); scheduleEmoteRender(); }, { passive: true });
 
   // --- hotkeys ---
   // 1. Toggle visibility — same as the × button / chat bubble (hide ⇄ return to the chosen mode).
@@ -1072,13 +1208,64 @@
     if (effectiveMode() === "hidden") setSiteMode(siteMode()).then(reveal);
     else reveal();
   }
+  // Blur the input and (in overlay mode) collapse the bars — same end state as Esc / the idle timer.
+  function unfocusChatInput() {
+    closeSuggest();
+    els.input.blur();
+    root.classList.add("meridian-idle");
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  }
   document.addEventListener("keydown", (e) => {
-    if (isOurInput(e.target)) return;
+    // comboFromEvent requires a modifier, so plain typing in our input never reaches a hotkey.
     const combo = comboFromEvent(e);
     if (!combo) return;
     if (prefs.hotkeyToggle && combo === prefs.hotkeyToggle) { e.preventDefault(); toggleVisibility(); }
-    else if (prefs.hotkeyFocus && combo === prefs.hotkeyFocus) { e.preventDefault(); focusChatInput(); }
+    else if (prefs.hotkeyFocus && combo === prefs.hotkeyFocus) {
+      e.preventDefault();
+      // Pressing the focus hotkey while the input is already focused toggles back off.
+      if (document.activeElement === els.input) unfocusChatInput();
+      else focusChatInput();
+    }
   }, true);
+
+  // --- hold-to-pause autoscroll ---
+  // A press-and-HOLD gesture (not a one-shot toggle), so it gets its own matcher that accepts a
+  // SINGLE bare key — "S", "Space", or even holding a lone modifier like "Alt". Holding the key
+  // freezes autoscroll; releasing it (or the window losing focus) resumes + snaps to the bottom.
+  let scrollHoldKey = null;          // the raw e.key currently holding the pause open, or null
+  let scrollHoldReleaseTimer = null; // deferred resume (so X11 autorepeat keyup+keydown can cancel it)
+  function isEditableTarget(el) {
+    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+  }
+  // A bare printable key (no modifier) would also type — don't hijack it while a field is focused.
+  function specIsBarePrintable(spec) { return !!spec && !spec.includes("+") && (spec === "Space" || spec.length === 1); }
+  function endScrollHold() {
+    if (scrollHoldReleaseTimer) { clearTimeout(scrollHoldReleaseTimer); scrollHoldReleaseTimer = null; }
+    if (!scrollHoldKey) return;
+    scrollHoldKey = null;
+    resumeAutoscroll(); // clears the paused state + snaps to the bottom to catch up
+  }
+  document.addEventListener("keydown", (e) => {
+    const spec = prefs.hotkeyPauseScroll;
+    if (!spec || hotkeySpecFromEvent(e) !== spec) return;
+    // Autorepeat (notably X11) fires keyup+keydown pairs while a key is held; a pending release here
+    // means this keydown is a repeat, not a re-press — cancel the release so the hold stays unbroken.
+    if (scrollHoldReleaseTimer) { clearTimeout(scrollHoldReleaseTimer); scrollHoldReleaseTimer = null; return; }
+    if (scrollHoldKey) return; // already holding
+    if (specIsBarePrintable(spec) && isEditableTarget(document.activeElement)) return; // let typing through
+    e.preventDefault();
+    scrollHoldKey = e.key;
+    setResumePill(true);
+  }, true);
+  document.addEventListener("keyup", (e) => {
+    if (!scrollHoldKey || e.key !== scrollHoldKey || scrollHoldReleaseTimer) return;
+    e.preventDefault();
+    // Defer slightly so an autorepeat keydown can cancel it; a real release fires after the delay.
+    scrollHoldReleaseTimer = setTimeout(() => { scrollHoldReleaseTimer = null; endScrollHold(); }, 60);
+  }, true);
+  // The keyup can be missed if focus leaves mid-hold (alt-tab, switching tabs) — never stay stuck.
+  window.addEventListener("blur", endScrollHold);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) endScrollHold(); });
 
   // --- inactivity → hide bars after 10s, blur input but keep typed text ---
   let idleTimer = null;
@@ -1118,6 +1305,47 @@
     // else: input is still focused → keep timer running so it can blur after 10 s
   });
 
+  // --- emote name/provider tooltip ---
+  // One shared tooltip on `root` (escapes the messages-box overflow that clipped the old per-emote
+  // ::after on the top line / near the edges). Shown on hover via delegation; flips below when there
+  // isn't room above.
+  const emoteTip = document.createElement("div");
+  emoteTip.className = "meridian-emote-tip";
+  root.appendChild(emoteTip);
+  let tipWrap = null;
+  function showEmoteTip(wrap) {
+    if (wrap === tipWrap) return;   // mouseover re-fires within the same emote — skip the layout reads
+    tipWrap = wrap;
+    const label = wrap.dataset.label || "";
+    if (!label) return;
+    emoteTip.textContent = label;
+    emoteTip.classList.add("show");
+    const rr = root.getBoundingClientRect();
+    const er = wrap.getBoundingClientRect();
+    const tw = emoteTip.offsetWidth, th = emoteTip.offsetHeight;
+    let left = (er.left - rr.left) + er.width / 2;
+    left = Math.max(tw / 2 + 4, Math.min(rr.width - tw / 2 - 4, left));
+    emoteTip.style.left = left + "px";
+    const above = (er.top - rr.top) - 6;
+    if (above - th < 2) {                               // not enough room above → drop below
+      emoteTip.classList.add("below");
+      emoteTip.style.top = (er.bottom - rr.top + 6) + "px";
+    } else {
+      emoteTip.classList.remove("below");
+      emoteTip.style.top = above + "px";
+    }
+  }
+  function hideEmoteTip() { tipWrap = null; emoteTip.classList.remove("show"); }
+  els.messages.addEventListener("mouseover", (e) => {
+    const wrap = e.target.closest?.(".meridian-emote-wrap");
+    if (wrap) showEmoteTip(wrap);
+  });
+  els.messages.addEventListener("mouseout", (e) => {
+    const wrap = e.target.closest?.(".meridian-emote-wrap");
+    // Only hide when actually leaving the wrap — not when crossing between its own children.
+    if (wrap && !wrap.contains(e.relatedTarget)) hideEmoteTip();
+  });
+
   // --- autoscroll + scrollbar visibility ---
   let userScrollUntil = 0;
   let scrollbarTimer = null;
@@ -1127,10 +1355,22 @@
     scrollbarTimer = setTimeout(() => els.messages.classList.remove("scrolling"), 800);
   }
   function setResumePill(show) { els.resume.classList.toggle("show", !!show); }
+  // Snap to the bottom, then re-snap on the next frame. The messages use `content-visibility:auto`,
+  // so a freshly appended multiline row is still unrendered (measured as one line via
+  // `contain-intrinsic-size`) when we first read `scrollHeight` — the initial snap can land a line
+  // short and clip the row's second line below the fold. Once the row scrolls into view it lays out
+  // at its true height; the rAF re-snap (coalesced) corrects to the real bottom.
+  let pinRaf = 0;
+  function pinToBottom() {
+    const m = els.messages;
+    m.scrollTop = m.scrollHeight;
+    if (pinRaf) return;
+    pinRaf = requestAnimationFrame(() => { pinRaf = 0; els.messages.scrollTop = els.messages.scrollHeight; });
+  }
   function resumeAutoscroll() {
     userScrollUntil = 0;
     setResumePill(false);
-    els.messages.scrollTop = els.messages.scrollHeight;
+    pinToBottom();
   }
   els.messages.addEventListener("wheel", () => {
     if (prefs.autoscroll) { userScrollUntil = Date.now() + 8000; setResumePill(true); }
@@ -1138,7 +1378,16 @@
   }, { passive: true });
   els.resume.addEventListener("click", (e) => { e.stopPropagation(); resumeAutoscroll(); });
   els.resume.addEventListener("mousedown", (e) => e.stopPropagation());
-  // (no "scroll" listener — programmatic auto-scroll would falsely flash the scrollbar)
+  // If the user manually scrolls back down to the bottom, immediately re-engage autoscroll (no need
+  // to wait out the 8 s timeout). Only acts while paused; doesn't flash the scrollbar.
+  els.messages.addEventListener("scroll", () => {
+    hideEmoteTip();   // content moved under the cursor → drop the (now stale) emote tooltip
+    if (!prefs.autoscroll || !userScrollUntil) return;
+    const m = els.messages;
+    // Generous threshold (~1.5 lines): on a fast chat the bottom keeps moving as messages arrive
+    // while paused, so an exact-bottom test can never be hit. Near-bottom is enough to re-engage.
+    if (m.scrollHeight - m.scrollTop - m.clientHeight <= 28) resumeAutoscroll();
+  }, { passive: true });
   // resume autoscroll after 8s; snap to bottom
   setInterval(() => {
     if (!prefs.autoscroll) { setResumePill(false); return; }
@@ -1162,12 +1411,32 @@
   const density = new DensityTracker({ baseRes: 2 });
   const highlights = new Map(); // key -> { name, url, count, threshold, wallTs, vt, behindLive }
   const hlEngine = new HighlightEngine({
-    windowMs: 12000,
+    windowMs: highlightWindow() * 1000,            // per-channel/global; refreshed below, not per-occurrence
     getThreshold: highlightThreshold,
     onHighlight: addHighlight,
     onUpdate: bumpHighlight
   });
+  // Push the resolved window into the engine on channel switch / pref change (keeps the per-message
+  // hot path a plain field read instead of re-resolving the channel + clamping every occurrence).
+  function applyHighlightWindow() { hlEngine.windowMs = highlightWindow() * 1000; }
   let waveLayer = null;
+  // Emote-marker clustering is DECOUPLED from positioning. `emoteMarkers` is the current grouping
+  // (each marker carries its leader, secondary list, +N, and reused DOM refs). It's recomputed only
+  // when "dirty" — a new/updated surge, a seekbar-width change (fullscreen / theater / window resize
+  // → FP changes), the wave layer being re-homed, or a 30 s safety timer (slow span-growth merges) —
+  // while the cheap per-tick position pass just slides the existing DOM along the scrolling seekbar.
+  let emoteMarkers = [];
+  let emoteRegroupDirty = true, emoteLastBarW = 0, emoteLastRegroupAt = 0, emoteBox = null;
+  let emoteRenderQueued = false;
+  const EMOTE_REGROUP_MS = 30000;
+  function markEmotesDirty() { emoteRegroupDirty = true; }
+  // rAF-debounced render so a burst of surges arriving in quick succession coalesces into ONE
+  // regroup+reposition instead of one per surge (the 2 s loop also drives renderEmotes directly).
+  function scheduleEmoteRender() {
+    if (emoteRenderQueued) return;
+    emoteRenderQueued = true;
+    requestAnimationFrame(() => { emoteRenderQueued = false; renderEmotes(); });
+  }
   let lastSeries = null, lastSpan = 0, lastStart = 0, lastOff = 0;
   let densityRes = 5, densityPeak = 1, lastPeakAt = 0, lastResAt = 0;
   // Cached seekbar stream-time live edge so the per-message hot path can timestamp density in the
@@ -1180,9 +1449,13 @@
     waveLayer.querySelectorAll("#meridianWaveGrad stop").forEach((st) => st.setAttribute("stop-color", c));
     const tl = waveLayer.querySelector(".meridian-wave-topline");
     if (tl) tl.setAttribute("stroke", c);
+    // Stems/dots carry the accent inline (set at regroup) — re-tint them on the next pass.
+    markEmotesDirty(); scheduleEmoteRender();
   }
   let highlightsKey = "";
   let saveHlTimer = null;
+  let densityKey = "";
+  let saveDensityTimer = null;
   // Refreshed by the 2 s render loop so the per-message hot path needs no DOM access.
   let densityArmed = false;
   let atLiveCached = true; // whether playback is at/near the live edge (refreshed by the 2 s loop)
@@ -1196,7 +1469,18 @@
     return (s.end - v.currentTime) <= 30; // within 30 s of the live edge counts as "live"
   }
 
-  function highlightThreshold() { return Math.max(3, prefs.highlightThreshold | 0 || 3); }
+  function highlightThreshold() {
+    const ch = (lastJoined || "").toLowerCase();
+    const per = ch && prefs.highlightThresholds?.[ch];
+    return Math.max(3, (per ?? prefs.highlightThreshold) | 0 || 5);
+  }
+  // Rolling unique-viewer window (seconds, clamped 2..120): per-channel override else the global.
+  function highlightWindow() {
+    const ch = (lastJoined || "").toLowerCase();
+    const per = ch && prefs.highlightWindows?.[ch];
+    const sec = (per ?? prefs.highlightWindowSec) | 0 || 12;
+    return Math.max(2, Math.min(120, sec));
+  }
   function highlightOffset() { const n = prefs.highlightOffsetSec; return Number.isFinite(n) ? Math.max(0, n) : 5; }
   function isLiveStream() {
     // `video.duration` is unreliable on YouTube live (often finite), so prefer the adapter's
@@ -1205,8 +1489,22 @@
     const v = SITE.getVideo?.();
     return !!(v && v.duration === Infinity);
   }
-  // The wave only makes sense on a live stream with a seekable DVR window (YouTube).
-  function waveActive() { return SITE.hasTimeline && prefs.highlightTimeline && isLiveStream(); }
+  // The wave is shown either LIVE (recording in real time) or in REPLAY on the finished VOD — a
+  // YouTube livestream keeps the same `watch?v=<id>` URL after it ends, so we re-key the persisted
+  // wave/markers by that videoId and replay them on the archive. `replayLoaded` is set by
+  // loadHighlights once persisted data for a non-live video has been read in.
+  let replayLoaded = false;
+  function waveActive() {
+    // The wave LAYER is active when EITHER the chat-activity wave or the emote markers are enabled —
+    // both share the seekbar coordinate + this layer. The wave PATH is only drawn when the timeline
+    // pref is on (see renderWave); emote markers render on their own with no wave behind them.
+    if (!SITE.hasTimeline) return false;
+    if (!(prefs.highlightTimeline || prefs.highlightEnabled)) return false;
+    return isLiveStream() || replayLoaded;
+  }
+  // We only RECORD while genuinely live (on a VOD the IRC carries the channel's *current* chat,
+  // which must never be written into the archived timeline).
+  function recordingActive() { return waveActive() && isLiveStream(); }
   function emoteHighlightsActive() { return waveActive() && prefs.highlightEnabled; }
 
   function videoSeekable() {
@@ -1236,7 +1534,9 @@
     // use) so the wave and the emotes scroll/scale in exact lockstep and never drift apart. We
     // extrapolate the live edge forward from the last sample by wall-clock elapsed.
     if (m.self || !densityArmed || !atLiveCached || liveEdgeVt <= 0) return; // pause when replaying behind live
-    density.add(liveEdgeVt + (Date.now() - liveEdgeAt) / 1000, 1);
+    // Only feed the density wave when the timeline is on; the emote engine still ingests below so
+    // emote markers work even with the wave off.
+    if (prefs.highlightTimeline) density.add(liveEdgeVt + (Date.now() - liveEdgeAt) / 1000, 1);
     if (!prefs.highlightEnabled) return;
     const user = (m.user || "").toLowerCase();
     const seen = new Set();
@@ -1273,13 +1573,17 @@
     // HIGHLIGHT_CAP (Map preserves insertion order → evict the oldest). Matches the storage cap so
     // nothing extra lingers in RAM. Clustering already limits what's *rendered* to ~50.
     while (highlights.size > HIGHLIGHT_CAP) highlights.delete(highlights.keys().next().value);
-    renderEmotes();
+    // A new surge changes group membership → regroup. rAF-coalesced so a burst is one regroup.
+    markEmotesDirty(); scheduleEmoteRender();
     scheduleSaveHighlights();
   }
   function bumpHighlight(u) {
     const rec = highlights.get(u.key);
     if (!rec) return;
-    rec.count = u.count; // picked up by the next renderEmotes() pass (2 s loop)
+    rec.count = u.count;
+    // A count bump can change which surge leads a cluster / the +N set, but it's not urgent — let the
+    // 2 s loop pick it up (mark dirty so that pass regroups rather than only repositioning).
+    markEmotesDirty();
     scheduleSaveHighlights();
   }
 
@@ -1380,6 +1684,14 @@
   function renderWave() {
     const s = videoSeekable();
     if (!waveLayer || !s) return;
+    // Emote-markers-only mode: the layer is up to host the markers, but no wave is drawn. Clear any
+    // existing path and drop the cached series so emotes perch at the flat fallback height.
+    if (!prefs.highlightTimeline) {
+      waveLayer.querySelector(".meridian-wave-path")?.setAttribute("d", "");
+      waveLayer.querySelector(".meridian-wave-topline")?.setAttribute("d", "");
+      lastSeries = null;
+      return;
+    }
     const w = streamWindow(s);
     const series = density.series(w.start, w.end, densityRes);
     lastSeries = series; lastSpan = w.span; lastStart = s.start; lastOff = w.off;
@@ -1416,67 +1728,311 @@
     return Math.min(1, (p?.v || 0) / (densityPeak || 1));
   }
 
+  // Geometry of the lane-stacked emote markers, mirrored in overlay.css (.meridian-wave-layer
+  // is WAVE_GEO.layer tall; the wave SVG occupies the bottom WAVE_GEO.band px). Emote markers
+  // never move horizontally (that would lie about the timestamp) — when two surges are too close
+  // they bump UP a lane, and a stem + dot ties each one to its exact moment on the wave crest.
+  // lane = bubble-center px from the layer bottom. Two lanes, generously spaced (well > bubble) so
+  // stacked markers read as clearly separate and the timeline stays uncluttered. The stats tooltip
+  // is mounted on the player and positions itself.
+  const WAVE_GEO = { layer: 86, band: 30, bubble: 16, lanes: [40, 70] };
+
+  // Format a stream-time offset (seconds from stream start) as h:mm:ss / m:ss.
+  function fmtStreamTime(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+  // --- Surge hover tooltip ---------------------------------------------------------------------
+  // A single shared tooltip mounted on the PLAYER (not nested in the seekbar) so it escapes
+  // YouTube's chrome stacking context and always sits in front of — and directly above — YouTube's
+  // own scrub-preview thumbnail, matched to that preview's width. Shown on emote hover.
+  let surgeTip = null, surgeTipLead = null;
+  function ensureSurgeTip() {
+    const player = SITE.findPlayer?.();
+    if (!player) return null;
+    if (surgeTip && surgeTip.parentElement === player) return surgeTip;
+    if (surgeTip) surgeTip.remove();
+    surgeTip = document.createElement("div");
+    surgeTip.className = "meridian-surge-tip";
+    player.appendChild(surgeTip);
+    return surgeTip;
+  }
+  // YouTube's currently-visible scrubber tooltip (storyboard frame + timestamp), if any.
+  function ytPreviewEl() {
+    const player = SITE.findPlayer?.();
+    if (!player) return null;
+    for (const el of player.querySelectorAll(".ytp-tooltip")) {
+      if (el.offsetWidth > 0 && el.offsetHeight > 0) return el;
+    }
+    return null;
+  }
+  function buildSurgeTipContent(lead, frac, secondary) {
+    // msgs/min reads bigger (and more intuitively "intense") than msgs/sec — peak density is a
+    // per-second rate, so ×60.
+    const rate = Math.round(waveHeightAtFrac(frac) * (densityPeak || 1) * 60);
+    const time = fmtStreamTime(highlightVt(lead));
+    const tip = surgeTip;
+    tip.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "meridian-surge-tip-head";
+    const thumb = document.createElement("img");
+    thumb.src = lead.url; thumb.alt = "";
+    const ht = document.createElement("div");
+    ht.className = "meridian-surge-tip-htxt";
+    const nm = document.createElement("div"); nm.className = "meridian-surge-tip-name";
+    nm.textContent = lead.name;
+    const tm = document.createElement("div"); tm.className = "meridian-surge-tip-time"; tm.textContent = time;
+    ht.append(nm, tm);
+    head.append(thumb, ht);
+    tip.append(head);
+    // Secondary emotes in this group → a stacked-card pill of the top 3, with "+N" beyond that.
+    if (secondary && secondary.length) {
+      const pill = document.createElement("div");
+      pill.className = "meridian-surge-tip-cluster";
+      const stack = document.createElement("span");
+      stack.className = "meridian-surge-tip-stack";
+      for (const rec of secondary.slice(0, 3)) {
+        const im = document.createElement("img");
+        im.src = rec.url; im.alt = rec.name; im.loading = "lazy";
+        stack.appendChild(im);
+      }
+      pill.appendChild(stack);
+      const extra = secondary.length - 3;
+      if (extra > 0) {
+        const more = document.createElement("span");
+        more.className = "meridian-surge-tip-more";
+        more.textContent = "+" + extra;
+        pill.appendChild(more);
+      }
+      tip.appendChild(pill);
+    }
+    const stats = document.createElement("div");
+    stats.className = "meridian-surge-tip-stats";
+    stats.innerHTML = `<div class="meridian-surge-tip-rate">${rate}<span>msg/min</span></div>` +
+      `<div class="meridian-surge-tip-uniq"><b>${lead.count || 0}</b> spamming</div>`;
+    tip.append(stats);
+  }
+  // Position the shared tooltip directly above YouTube's preview, matched to its width; if the
+  // preview isn't up, fall back to floating above the seekbar at the marker's x.
+  function positionSurgeTip(frac) {
+    const tip = surgeTip, player = SITE.findPlayer?.();
+    if (!tip || !player) return;
+    const pr = player.getBoundingClientRect();
+    const prev = ytPreviewEl();
+    let leftPx, bottomPx, widthPx;
+    if (prev) {
+      const r = prev.getBoundingClientRect();
+      widthPx = r.width;
+      leftPx = r.left - pr.left + r.width / 2;
+      bottomPx = pr.bottom - r.top + 8;            // perch just above the preview
+    } else {
+      const sb = SITE.findSeekbar?.();
+      const sr = sb && sb.getBoundingClientRect();
+      widthPx = 168;
+      leftPx = sr ? (sr.left - pr.left + frac * sr.width) : pr.width * frac;
+      bottomPx = (sr ? pr.bottom - sr.top : 0) + 100;
+    }
+    // Keep the tooltip within the player horizontally.
+    const half = widthPx / 2;
+    leftPx = Math.max(half + 4, Math.min(pr.width - half - 4, leftPx));
+    tip.style.width = widthPx + "px";
+    tip.style.left = leftPx + "px";
+    tip.style.bottom = bottomPx + "px";
+  }
+  // Auto-hide the tooltip after a few idle seconds, mirroring YouTube hiding its scrub preview when
+  // the cursor stops moving — otherwise a stationary hover leaves our tip floating indefinitely.
+  let surgeTipIdle = null;
+  function armSurgeTipIdle() {
+    if (surgeTipIdle) clearTimeout(surgeTipIdle);
+    surgeTipIdle = setTimeout(hideSurgeTip, 2500);
+  }
+  function showSurgeTip(lead, frac, secondary) {
+    if (!ensureSurgeTip()) return;
+    surgeTipLead = { lead, frac, secondary };
+    buildSurgeTipContent(lead, frac, secondary);
+    positionSurgeTip(frac);
+    surgeTip.style.display = "block";
+    armSurgeTipIdle();
+  }
+  function hideSurgeTip() {
+    if (surgeTipIdle) { clearTimeout(surgeTipIdle); surgeTipIdle = null; }
+    surgeTipLead = null;
+    if (surgeTip) surgeTip.style.display = "none";
+  }
+
+  // Orchestrator (2 s loop + rAF schedule). Two phases: GROUP (rebuild clusters + reconcile DOM) and
+  // POSITION (slide existing DOM along the scrolling seekbar). Grouping only runs when something that
+  // can change cluster membership happened — a new/updated surge (dirty flag), a seekbar-width change
+  // (fullscreen / theater / window resize → the FP footprint changes), the wave layer being re-homed
+  // (our DOM refs are gone), or the 30 s safety timer (slow span-growth merges of stable markers).
+  // Positioning is cheap and runs every pass. This keeps the per-tick cost off the DOM-rebuild path.
   function renderEmotes() {
     if (!waveLayer) return;
     const box = waveLayer.querySelector(".meridian-wave-emotes");
     const s = videoSeekable();
-    if (!emoteHighlightsActive() || !s) { box.replaceChildren(); return; }
+    if (!emoteHighlightsActive() || !s) {
+      if (box.firstChild) box.replaceChildren();
+      emoteMarkers = []; emoteBox = box; emoteRegroupDirty = true; emoteLastBarW = 0;
+      return;
+    }
+    const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
+    const now = Date.now();
+    const boxChanged = box !== emoteBox;
+    const widthChanged = barW !== emoteLastBarW;
+    if (boxChanged) emoteMarkers = []; // layer was rebuilt → old DOM refs point at a detached node
+    if (emoteRegroupDirty || boxChanged || widthChanged || (now - emoteLastRegroupAt) >= EMOTE_REGROUP_MS) {
+      regroupEmotes(box, s, barW);
+      emoteRegroupDirty = false; emoteBox = box; emoteLastBarW = barW; emoteLastRegroupAt = now;
+    }
+    positionEmotes(s);
+  }
+
+  // GROUP: cluster the visible surges and reconcile the DOM against the previous grouping (reusing
+  // each marker's stem/dot/emote/img by leader key, so the expensive <img> elements aren't recreated
+  // every regroup). The clustering math is identical to before — only its scheduling + the DOM reuse
+  // changed.
+  function regroupEmotes(box, s, barW) {
     const recs = [];
     for (const rec of highlights.values()) {
       const frac = highlightFrac(rec, s);
       if (frac != null && frac >= 0 && frac <= 1) recs.push({ rec, frac });
     }
-    recs.sort((a, b) => a.frac - b.frac);
-    const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
-    // Gap is the larger of: no-pixel-overlap, and 1/50 (so total clusters can't exceed ~51).
-    // Raising the gap is exactly the "group when >50 emotes" behaviour from the spec.
-    const gap = Math.max(22 / barW, 1 / 50);
-    const clusters = [];
-    for (const item of recs) {
-      const last = clusters[clusters.length - 1];
-      if (last && item.frac - last.startFrac <= gap) {
-        last.items.push(item);
-      } else {
-        clusters.push({ startFrac: item.frac, items: [item] });
+
+    // One emote's footprint as a fraction of the bar. Markers are CENTERED and wide emotes render
+    // up to 40px across (the `.meridian-wave-emote img` max-width), so a footprint based on the
+    // square bubble (16px) let wide neighbours sit almost edge-to-edge. Use the max rendered width
+    // plus breathing room so even the widest neighbours keep a clear gap; closer surges collapse
+    // into a "+N". Resolution-independent (a 10 min and a 6 h stream group the same way).
+    const MAX_EMOTE_W = 40;             // matches .meridian-wave-emote img max-width
+    const EMOTE_W = MAX_EMOTE_W + 1;    // + tiny gap between adjacent markers
+    const FP = EMOTE_W / barW;
+
+    // Cluster surges into non-overlapping markers, each anchored on its STRONGEST surge.
+    // Greedy by unique-viewer count (ties → earlier / left-most): walk surges strongest-first;
+    // each one either starts a new marker, or — if it falls within one footprint (FP) of an
+    // already-placed marker — is absorbed into the nearest such marker as a secondary. Because a
+    // surge only ever claims its own FP, markers are guaranteed pairwise ≥ FP apart (no overlap)
+    // while still sitting on the peak surge of their neighborhood. This avoids both failure modes:
+    // anchoring at the leftmost item (marker drifts off the real peak) and single-linkage chaining
+    // (a ramp of ever-stronger surges snowballing into one giant cluster — a new marker still only
+    // claims its own FP, so dense regions get one marker per FP, not one marker total).
+    const byStrength = recs.slice().sort((a, b) =>
+      (b.rec.count || 0) - (a.rec.count || 0) || a.frac - b.frac);
+    const markers = [];
+    for (const item of byStrength) {
+      let best = null, bestDist = Infinity;
+      for (const m of markers) {
+        const dist = Math.abs(item.frac - m.frac);
+        if (dist < FP && dist < bestDist) { bestDist = dist; best = m; }
       }
+      if (best) best.members.push(item);
+      else markers.push({ lead: item.rec, frac: item.frac, members: [] });
     }
-    const frag = document.createDocumentFragment();
-    for (const c of clusters) {
-      // Anchor the whole cluster to its LEADER = the emote with the most unique viewers, so the
-      // marker's position, its image, and its click-seek all point at the leader's timestamp (the
-      // strongest surge in the group). Ties fall to the earliest (left-most) item.
-      let leadItem = c.items[0];
-      for (const it of c.items) if ((it.rec.count || 0) > (leadItem.rec.count || 0)) leadItem = it;
-      const lead = leadItem.rec;
-      const frac = leadItem.frac;
-      // "+N" counts the OTHER distinct emotes grouped here (repeat surges of one emote collapse).
-      const hidden = new Set(c.items.map((x) => x.rec.name)).size - 1;
-      const el = document.createElement("div");
-      el.className = "meridian-wave-emote";
-      el.style.left = (frac * 100) + "%";
-      el.style.bottom = (waveHeightAtFrac(frac) * 88 + 8) + "%"; // perched just above the wave
-      const img = document.createElement("img");
-      img.src = lead.url; img.alt = lead.name; img.loading = "lazy";
-      el.appendChild(img);
-      if (hidden > 0) {
-        const badge = document.createElement("span");
-        badge.className = "meridian-wave-badge";
-        badge.textContent = "+" + hidden;
-        el.appendChild(badge);
+
+    // Finalize each marker: the "+N" badge / tooltip lists the OTHER distinct emote names absorbed
+    // here (a repeat surge of the leader's own emote collapses into the leader, not the count).
+    for (const m of markers) {
+      const byName = new Map();
+      for (const it of m.members) {
+        if (it.rec.name === m.lead.name) continue;
+        const ex = byName.get(it.rec.name);
+        if (!ex || (it.rec.count || 0) > (ex.count || 0)) byName.set(it.rec.name, it.rec);
       }
-      el.title = `${lead.name} ×${lead.count}` + (hidden > 0 ? ` · +${hidden} more emote${hidden === 1 ? "" : "s"}` : "");
-      if (SITE.canSeek === false) {
-        el.style.cursor = "default";
-      } else {
-        el.addEventListener("click", (e) => {
-          e.stopPropagation(); e.preventDefault();
-          seekTo(highlightVt(lead)); // seek to the first emote's timestamp — matches its position
-        });
-        el.addEventListener("mousedown", (e) => e.stopPropagation());
-      }
-      frag.appendChild(el);
+      m.secondary = [...byName.values()].sort((a, b) => (b.count || 0) - (a.count || 0));
+      m.others = m.secondary.length;
     }
-    box.replaceChildren(frag);
+
+    markers.sort((a, b) => a.frac - b.frac);
+
+    // Reconcile DOM keyed by leader. Reuse a marker's nodes when the same surge still leads its
+    // cluster (its emote image is unchanged); build fresh ones otherwise; drop the rest.
+    const accent = waveColor();
+    const prev = new Map();
+    for (const m of emoteMarkers) prev.set(m.lead.key, m);
+    for (const m of markers) {
+      const reuse = prev.get(m.lead.key);
+      if (reuse) { m.els = reuse.els; prev.delete(m.lead.key); }
+      else m.els = buildMarkerEls(box);
+      applyMarkerContent(m, accent);
+    }
+    for (const gone of prev.values()) { gone.els.stem.remove(); gone.els.dot.remove(); gone.els.el.remove(); }
+    emoteMarkers = markers;
+  }
+
+  // Build the (positionless) DOM for one marker. Listeners read the marker via `el._m` (set in
+  // applyMarkerContent) so a reused element always reflects its CURRENT cluster, not the one it was
+  // first built for.
+  function buildMarkerEls(box) {
+    const stem = document.createElement("div");
+    stem.className = "meridian-wave-stem";
+    const dot = document.createElement("div");
+    dot.className = "meridian-wave-dot";
+    const el = document.createElement("div");
+    el.className = "meridian-wave-emote";
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    el.appendChild(img);
+    el.addEventListener("mouseenter", () => { const m = el._m; if (m) showSurgeTip(m.lead, m.frac, m.secondary); });
+    el.addEventListener("mousemove", () => { const m = el._m; if (m && surgeTipLead) { positionSurgeTip(m.frac); armSurgeTipIdle(); } });
+    el.addEventListener("mouseleave", hideSurgeTip);
+    if (SITE.canSeek === false) {
+      el.style.cursor = "default";
+    } else {
+      el.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); const m = el._m; if (m) seekTo(highlightVt(m.lead)); });
+      el.addEventListener("mousedown", (e) => e.stopPropagation());
+    }
+    box.append(stem, dot, el);
+    return { stem, dot, el, img, badge: null, url: "" };
+  }
+
+  // Apply the leader's emote + accent + "+N" badge to a marker's (possibly reused) DOM, and point
+  // its listeners at this marker object.
+  function applyMarkerContent(m, accent) {
+    const els = m.els;
+    els.el._m = m;
+    els.stem.style.background = `linear-gradient(${accent}, transparent)`;
+    els.dot.style.background = accent;
+    if (els.url !== m.lead.url) { els.img.src = m.lead.url; els.url = m.lead.url; }
+    els.img.alt = m.lead.name;
+    if (m.others > 0) {
+      if (!els.badge) {
+        els.badge = document.createElement("span");
+        els.badge.className = "meridian-wave-badge";
+        els.el.appendChild(els.badge);
+      }
+      els.badge.textContent = "+" + m.others;
+      els.badge.style.display = "";
+    } else if (els.badge) {
+      els.badge.style.display = "none";
+    }
+  }
+
+  // POSITION: slide every live marker to its current fraction on the scrolling seekbar (cheap style
+  // writes only — no DOM creation). Markers whose leader has scrolled outside the visible bar are
+  // hidden until the next regroup drops them.
+  function positionEmotes(s) {
+    const laneY = WAVE_GEO.lanes[0];
+    for (const m of emoteMarkers) {
+      const frac = highlightFrac(m.lead, s);
+      const { stem, dot, el } = m.els;
+      if (frac == null || frac < 0 || frac > 1) {
+        if (el.style.display !== "none") stem.style.display = dot.style.display = el.style.display = "none";
+        continue;
+      }
+      if (el.style.display === "none") stem.style.display = dot.style.display = el.style.display = "";
+      m.frac = frac;
+      const leftPct = (frac * 100) + "%";
+      const crestPx = Math.max(2, waveHeightAtFrac(frac) * WAVE_GEO.band);
+      stem.style.left = leftPct;
+      stem.style.bottom = crestPx + "px";
+      stem.style.height = Math.max(0, (laneY - WAVE_GEO.bubble / 2) - crestPx) + "px";
+      dot.style.left = leftPct;
+      dot.style.bottom = crestPx + "px";
+      el.style.left = leftPct;
+      el.style.bottom = laneY + "px";
+    }
   }
 
   // --- persistence (emote highlights only; the density wave is live/session-derived) ---
@@ -1490,34 +2046,70 @@
   }
   async function saveHighlights() {
     saveHlTimer = null;
-    if (!highlightsKey) return;
+    if (!highlightsKey || !prefs.highlightPersistEmotes) return;
     const arr = [...highlights.values()]
       .map(({ key, name, url, count, threshold, wallTs, vt, behindLive }) => ({ key, name, url, count, threshold, wallTs, vt, behindLive }))
       .slice(-HIGHLIGHT_CAP);
     try { await chrome.storage.local.set({ [highlightsKey]: arr }); } catch {}
   }
+  // Density wave persistence (replay the intensity timeline on the VOD). Keyed off the same videoId.
+  function densityStorageKey() {
+    const vid = SITE.videoId?.() || lastJoined || HOST;
+    return `meridian.density.${HOST}.${vid}`;
+  }
+  function scheduleSaveDensity() {
+    if (saveDensityTimer || !prefs.highlightPersistDensity) return;
+    saveDensityTimer = setTimeout(saveDensity, 4000);
+  }
+  async function saveDensity() {
+    saveDensityTimer = null;
+    if (!densityKey || !prefs.highlightPersistDensity || !density.size) return;
+    try { await chrome.storage.local.set({ [densityKey]: density.serialize() }); } catch {}
+  }
   async function loadHighlights() {
     const key = hlStorageKey();
     if (key === highlightsKey) return;
     highlightsKey = key;
+    densityKey = densityStorageKey();
     highlights.clear();
     hlEngine.reset();
     // New stream/video — drop the previous stream's density wave so nothing carries over
     // (a channel can run several livestreams; each has a distinct videoId/key).
     density.reset();
-    if (!waveActive()) return;
+    replayLoaded = false;
+    const live = isLiveStream();
+    // Bail only when the wave is entirely off (timeline pref or unsupported site). On a VOD we must
+    // still read storage to discover whether there's an archived timeline to replay.
+    if (!(SITE.hasTimeline && (prefs.highlightTimeline || prefs.highlightEnabled))) return;
     try {
-      const o = await chrome.storage.local.get(key);
-      for (const rec of o[key] || []) highlights.set(rec.key, rec);
+      const wantEmotes = prefs.highlightPersistEmotes, wantDensity = prefs.highlightPersistDensity;
+      const o = await chrome.storage.local.get([
+        ...(wantEmotes ? [key] : []),
+        ...(wantDensity ? [densityKey] : []),
+      ]);
+      if (wantEmotes) for (const rec of o[key] || []) highlights.set(rec.key, rec);
+      if (wantDensity && o[densityKey]) { density.restore(o[densityKey]); lastResAt = 0; lastPeakAt = 0; }
     } catch {}
+    // On a finished VOD, flip on replay if anything was restored, so waveActive() turns true and the
+    // 2 s loop starts drawing the archived wave/markers.
+    if (!live) replayLoaded = (density.size > 0 || highlights.size > 0);
+    markEmotesDirty(); // highlight set was just swapped for this video → regroup
     renderEmotes();
   }
 
   // Called when the highlight prefs change (toggle on/off).
   function refreshHighlightState() {
-    if (waveActive()) { highlightsKey = ""; lastResAt = 0; lastPeakAt = 0; loadHighlights(); }
-    else {
-      if (waveLayer) waveLayer.style.display = "none";
+    highlightsKey = ""; densityKey = ""; lastResAt = 0; lastPeakAt = 0;
+    if (SITE.hasTimeline && (prefs.highlightTimeline || prefs.highlightEnabled)) {
+      loadHighlights();
+    } else {
+      // Both layers off — tear down immediately.
+      replayLoaded = false;
+      if (waveLayer) {
+        waveLayer.style.display = "none";
+        waveLayer.querySelector(".meridian-wave-emotes")?.replaceChildren();
+      }
+      emoteMarkers = []; emoteRegroupDirty = true; emoteBox = null; emoteLastBarW = 0;
       highlights.clear(); hlEngine.reset(); density.reset();
     }
   }
@@ -1528,16 +2120,27 @@
   // channel-logo / like-dislike overlays clear of the wave + emotes.
   function markWaveOnPlayer(show) { SITE.findPlayer?.()?.classList.toggle("meridian-has-wave", !!show); }
   setInterval(() => {
-    densityArmed = waveActive();
-    if (!densityArmed) { if (waveLayer) waveLayer.style.display = "none"; markWaveOnPlayer(false); return; }
+    // `densityArmed` gates the per-message RECORDING hot path (live only); the wave can still be
+    // DISPLAYED in replay on a finished VOD.
+    densityArmed = recordingActive();
+    // Pick up video changes even while the wave is currently off — this is what lets a finished
+    // livestream's VOD flip into replay (loadHighlights reads storage and sets `replayLoaded`).
+    if (SITE.hasTimeline && (prefs.highlightTimeline || prefs.highlightEnabled) && hlStorageKey() !== highlightsKey) loadHighlights();
+    // Stream ended while watching (live → VOD, same videoId): keep showing what we already recorded.
+    if (!isLiveStream() && !replayLoaded && (density.size > 0 || highlights.size > 0)) replayLoaded = true;
+    if (!waveActive()) { if (waveLayer) waveLayer.style.display = "none"; markWaveOnPlayer(false); return; }
     const s = videoSeekable();
     if (!s) { markWaveOnPlayer(false); return; }
     atLiveCached = atLiveEdge(s); // gates the per-message recording hot path
     liveEdgeVt = s.end; liveEdgeAt = Date.now(); // sample the seekbar live edge for the hot path
-    if (hlStorageKey() !== highlightsKey) loadHighlights();
     const now = Date.now();
-    // Keep density bounded: drop buckets older than the stream-time window we could ever render.
-    density.pruneBefore(s.end - Math.max(waveWindow(s), 600) - highlightOffset());
+    // Keep density bounded. While recording with persistence on we keep (almost) the whole stream
+    // so it can be replayed on the VOD; otherwise just the renderable window.
+    if (densityArmed && prefs.highlightTimeline) {
+      const keepSec = prefs.highlightPersistDensity ? 12 * 3600 : Math.max(waveWindow(s), 600) + highlightOffset();
+      density.pruneBefore(s.end - keepSec);
+      scheduleSaveDensity();
+    }
     recomputeResIfDue(now, s);
     recomputePeakIfDue(now, s);
     // No seekbar right now (e.g. Kick controls hidden) → render nothing, so the wave + emotes
@@ -1636,11 +2239,12 @@
 
     els.messages.appendChild(el);
     pruneOldMessages();
-    if (shouldAutoscroll()) els.messages.scrollTop = els.messages.scrollHeight;
+    if (shouldAutoscroll()) pinToBottom();
   }
 
   function shouldAutoscroll() {
     if (!prefs.autoscroll) return false;
+    if (scrollHoldKey) return false; // hold-to-pause hotkey is held down
     if (userScrollUntil && Date.now() < userScrollUntil) return false;
     return true;
   }
@@ -1830,14 +2434,22 @@
   function buildDockTabs() {
     const bar = document.createElement("div");
     bar.className = "meridian-dock-tabs";
-    const native = document.createElement("button");
-    native.className = "meridian-dock-tab";
-    native.dataset.tab = "native";
-    native.textContent = SITE.nativeChatLabel || "Site";
-    const twitch = document.createElement("button");
-    twitch.className = "meridian-dock-tab";
-    twitch.dataset.tab = "twitch";
-    twitch.textContent = "Twitch";
+    // Source-badge tabs: a colored dot per source (the site's brand color + Twitch violet) with an
+    // accent underline on the active one, so it reads as "which chat am I looking at".
+    const mkTab = (tab, label, color) => {
+      const b = document.createElement("button");
+      b.className = "meridian-dock-tab";
+      b.dataset.tab = tab;
+      b.style.setProperty("--tab-color", color);
+      const dot = document.createElement("span");
+      dot.className = "meridian-dock-tab-dot";
+      const txt = document.createElement("span");
+      txt.textContent = label;
+      b.append(dot, txt);
+      return b;
+    };
+    const native = mkTab("native", SITE.nativeChatLabel || "Site", SITE.brandColor || "#FF0033");
+    const twitch = mkTab("twitch", "Twitch", "#9146FF");
     bar.append(native, twitch);
     bar.addEventListener("click", (e) => {
       const b = e.target.closest(".meridian-dock-tab");
@@ -2036,6 +2648,20 @@
     if (e.metaKey) parts.push("Meta");
     if (parts.length === 0) return null;
     parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    return parts.join("+");
+  }
+  // Like comboFromEvent but allows a BARE key (no modifier) and a lone modifier — used by the
+  // hold-to-pause hotkey, which is a single-key hold gesture. Must match the popup's capture format.
+  function hotkeySpecFromEvent(e) {
+    const k = e.key;
+    if (["Control","Alt","Shift","Meta"].includes(k)) return k; // lone modifier held
+    const parts = [];
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    if (e.metaKey) parts.push("Meta");
+    const named = k === " " ? "Space" : (k.length === 1 ? k.toUpperCase() : k);
+    parts.push(named);
     return parts.join("+");
   }
 

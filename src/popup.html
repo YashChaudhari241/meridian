@@ -2,12 +2,17 @@
 <html>
 <head>
   <meta charset="utf-8" />
+  <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <div class="hdr">
-    <strong>Meridian</strong>
-    <span class="sub">Twitch chat on YouTube</span>
+    <img class="mark" src="assets/meridian-mark.svg" alt="" />
+    <div class="titlewrap">
+      <strong>Meridian</strong>
+      <span class="sub">Twitch chat on YouTube</span>
+    </div>
+    <span id="headerStatus"><span class="dot"></span><span id="headerStatusText">Anonymous</span></span>
   </div>
 
   <div class="tabs" id="tabs">
@@ -16,16 +21,21 @@
     <button class="tab" data-tab="chat">Chat</button>
     <button class="tab" data-tab="appearance">Appearance</button>
     <button class="tab" data-tab="hotkeys">Hotkeys</button>
+    <button class="tab" data-tab="reset">Reset</button>
   </div>
 
   <!-- General -->
   <section class="panel" data-tab="general">
-    <div id="status" class="card"></div>
+    <div class="card conncard" title="Connect your Twitch account to send messages. Anonymous read only until connected">
+      <div id="status"></div>
+      <button id="connectTwitch">Connect</button>
+      <button id="disconnectTwitch" class="secondary">Disconnect</button>
+      <div class="hint" id="authMsg"></div>
+      <div class="hint" id="redirectHelp"></div>
+    </div>
     <div class="card" title="Master switch for Meridian across every site">
-      <label class="row" style="gap:8px;">
-        <input id="extensionEnabled" type="checkbox" />
-        <span>Extension enabled</span>
-      </label>
+      <label class="row"><span>Extension enabled</span><input id="extensionEnabled" type="checkbox" /></label>
+      <div class="hint">Inject Meridian on supported sites.</div>
     </div>
     <div class="card" title="How chat appears on this site, saved per site. Auto floats in fullscreen and docks otherwise">
       <label>Display mode (this site)</label>
@@ -35,21 +45,12 @@
         <option value="docked">Docked (in the page)</option>
       </select>
     </div>
-    <div class="card" title="Connect your Twitch account to send messages. Anonymous read only until connected">
-      <label>Twitch account</label>
-      <div class="row">
-        <button id="connectTwitch">Connect Twitch</button>
-        <button id="disconnectTwitch" class="secondary">Disconnect</button>
-      </div>
-      <div class="hint" id="authMsg"></div>
-      <div class="hint" id="redirectHelp"></div>
-    </div>
   </section>
 
   <!-- Site settings -->
   <section class="panel" data-tab="youtube">
     <div class="card" id="siteCard">
-      <div id="siteEnabledLabel" style="font-weight:600;"></div>
+      <div id="siteEnabledLabel" style="font-weight:600; color:var(--fg-1);"></div>
       <div class="hint" id="siteHint"></div>
     </div>
     <div class="card" id="ytLoadOnCard" title="Choose whether the overlay loads on livestreams only or on every YouTube video">
@@ -60,17 +61,19 @@
       </select>
     </div>
     <div class="card" title="Keep the overlay inside the player, following theater and fullscreen">
-      <label class="row" style="gap:8px;">
-        <input id="boundToPlayer" type="checkbox" />
-        <span>Bind overlay to the video player</span>
-      </label>
+      <label class="row"><span>Bind overlay to the video player</span><input id="boundToPlayer" type="checkbox" /></label>
     </div>
-    <div class="card" title="Map this page's YouTube handle or Kick slug to a Twitch channel, joined automatically">
-      <label>Channel → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
-      <textarea id="mappings" rows="8" spellcheck="false" placeholder="@ESLCS = eslcs
-xqc = xqc"></textarea>
+    <div class="card" id="ytMappingsCard" title="Map this page's YouTube handle to a Twitch channel, joined automatically">
+      <label>YouTube → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
+      <textarea id="mappings" rows="8" spellcheck="false" placeholder="@eslcs = eslcs"></textarea>
       <button id="saveMappings">Save mappings</button>
       <span id="mappingsMsg" class="hint"></span>
+    </div>
+    <div class="card" id="kickMappingsCard" title="Map a Kick slug to a Twitch channel, joined automatically">
+      <label>Kick → Twitch mappings (one per line: <code>slug = twitch_channel</code>)</label>
+      <textarea id="kickMappings" rows="8" spellcheck="false" placeholder="@eslcs = eslcs"></textarea>
+      <button id="saveKickMappings">Save mappings</button>
+      <span id="kickMappingsMsg" class="hint"></span>
     </div>
   </section>
 
@@ -85,9 +88,9 @@ xqc = xqc"></textarea>
     </div>
     <div class="card" title="Choose which global and channel emote sets to display">
       <label>Third-party emotes</label>
-      <label class="row" style="gap:8px;"><input id="emote7tv" type="checkbox" /><span>7TV</span></label>
-      <label class="row" style="gap:8px;"><input id="emoteBttv" type="checkbox" /><span>BetterTTV</span></label>
-      <label class="row" style="gap:8px;"><input id="emoteFfz" type="checkbox" /><span>FrankerFaceZ</span></label>
+      <label class="row"><span>7TV</span><input id="emote7tv" type="checkbox" /></label>
+      <label class="row"><span>BetterTTV</span><input id="emoteBttv" type="checkbox" /></label>
+      <label class="row"><span>FrankerFaceZ</span><input id="emoteFfz" type="checkbox" /></label>
     </div>
     <div class="card" title="Flush new messages in one batch every this many milliseconds. Zero renders instantly">
       <label>Render batching (ms; 0 = instant)</label>
@@ -104,45 +107,62 @@ xqc = xqc"></textarea>
       </div>
     </div>
     <div class="card">
-      <label class="row" style="gap:8px;" title="Show a chat activity wave over the live seekbar on YouTube livestreams">
-        <input id="highlightTimeline" type="checkbox" />
+      <label class="row" title="Show a chat activity wave over the live seekbar on YouTube livestreams">
         <span>Highlight timeline (chat-activity wave)</span>
+        <input id="highlightTimeline" type="checkbox" />
       </label>
-      <label class="row" style="gap:8px; margin-top:8px;" title="Place emote surges on the wave. Click one to jump to that moment">
+      <label class="row" title="Mark emote surges on the seekbar (works with or without the wave). Click one to jump to that moment">
+        <span>Emote highlights (emote surge markers)</span>
         <input id="highlightEnabled" type="checkbox" />
-        <span>Emote highlights (emotes on the wave)</span>
       </label>
-      <label class="row" style="gap:8px; margin-top:8px;" title="Color of the activity wave and emote markers">
-        <span style="flex:none;">Timeline color</span>
-        <input id="highlightColor" type="color" style="flex:none; width:42px; height:26px; padding:1px;" />
+      <label class="row" title="Color of the activity wave and emote markers">
+        <span>Timeline color</span>
+        <input id="highlightColor" type="color" />
       </label>
-      <div class="row" style="margin-top:8px;">
+      <label class="row" title="Keep emote surge markers for this video and replay them on the VOD after the stream ends (matched by the video's URL)">
+        <span>Retain emote highlights</span>
+        <input id="highlightPersistEmotes" type="checkbox" />
+      </label>
+      <label class="row" title="Keep the chat-intensity wave for this video and replay it on the VOD after the stream ends (matched by the video's URL)">
+        <span>Retain intensity timeline</span>
+        <input id="highlightPersistDensity" type="checkbox" />
+      </label>
+      <div class="row">
         <button id="clearHighlightCache" class="secondary">Clear highlight cache</button>
-        <span id="clearHighlightMsg" class="hint"></span>
+        <span id="clearHighlightMsg" class="hint" style="width:auto;"></span>
       </div>
+      <label id="thresholdLabel" style="margin-top:10px;" title="Unique viewers needed within the highlight window to mark an emote surge">Emote highlight threshold (unique viewers)</label>
+      <div class="row" title="Unique viewers needed within the highlight window to mark an emote surge">
+        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
+        <button id="saveHighlightThreshold">Save</button>
+        <button id="saveGlobalThreshold" class="secondary" title="Save as the default threshold used for channels without their own value">Set global</button>
+      </div>
+      <span id="highlightThresholdHint" class="hint"></span>
+      <label id="windowLabel" style="margin-top:10px;" title="Length of the rolling window the unique-viewer count is measured over (smaller = needs a faster burst)">Emote highlight window (seconds)</label>
+      <div class="row" title="Length of the rolling window the unique-viewer count is measured over (smaller = needs a faster burst)">
+        <input id="highlightWindow" type="number" min="2" max="120" step="1" />
+        <button id="saveHighlightWindow">Save</button>
+        <button id="saveGlobalWindow" class="secondary" title="Save as the default window used for channels without their own value">Set global</button>
+      </div>
+      <span id="highlightWindowHint" class="hint"></span>
     </div>
     <details class="card" id="advancedCard">
       <summary>Advanced</summary>
-      <label class="row" style="gap:8px; margin-top:8px;" title="On keeps highlights at the live edge. Off keeps them at your playback position">
-        <input id="highlightAnchorLive" type="checkbox" />
+      <label class="row" title="On keeps highlights at the live edge. Off keeps them at your playback position">
         <span>Anchor highlights to the live edge</span>
+        <input id="highlightAnchorLive" type="checkbox" />
       </label>
-      <label style="margin-top:8px;" title="Shift the wave and markers this many seconds into the past for reaction time">Highlight timeline offset (seconds)</label>
+      <label style="margin-top:10px;" title="Shift the wave and markers this many seconds into the past for reaction time">Highlight timeline offset (seconds)</label>
       <div class="row" title="Shift the wave and markers this many seconds into the past for reaction time">
         <input id="highlightOffset" type="number" min="0" max="120" step="1" />
         <button id="saveHighlightOffset">Save</button>
       </div>
-      <label style="margin-top:8px;" title="Unique viewers needed within about twelve seconds to mark an emote surge">Threshold (unique viewers / ~12 s)</label>
-      <div class="row" title="Unique viewers needed within about twelve seconds to mark an emote surge">
-        <input id="highlightThreshold" type="number" min="3" max="100000" step="1" />
-        <button id="saveHighlightThreshold">Save</button>
-      </div>
     </details>
+    <div class="card" title="Show the channel's live Twitch viewer count in a pill on the overlay. Requires connecting your Twitch account; updates about once a minute.">
+      <label class="row"><span>Live viewer count (requires Twitch sign-in)</span><input id="showViewers" type="checkbox" /></label>
+    </div>
     <div class="card" title="Remove moderated messages instead of dimming them">
-      <label class="row" style="gap:8px;">
-        <input id="hideDeleted" type="checkbox" />
-        <span>Hide deleted messages</span>
-      </label>
+      <label class="row"><span>Hide deleted messages</span><input id="hideDeleted" type="checkbox" /></label>
     </div>
     <div class="card" title="Hide messages containing any of these words">
       <label>Blocked words (one per line, case-insensitive)</label>
@@ -155,23 +175,18 @@ word2"></textarea>
 
   <!-- Appearance -->
   <section class="panel" data-tab="appearance">
+    <div class="card" title="Color of the activity wave and emote markers">
+      <label>Timeline accent</label>
+      <div class="row">
+        <span style="flex:1; font-size:13.5px; color:var(--fg-2);">Glow color of the wave and surge stems.</span>
+        <input id="highlightColorAppearance" type="color" />
+      </div>
+    </div>
     <div class="card">
-      <label class="row" style="gap:8px;" title="Show a translucent background behind chat">
-        <input id="bgEnabled" type="checkbox" />
-        <span>Background color</span>
-      </label>
-      <label class="row" style="gap:8px;" title="Blur the video behind the chat background">
-        <input id="blurEnabled" type="checkbox" />
-        <span>Background blur</span>
-      </label>
-      <label class="row" style="gap:8px;" title="Cast a drop shadow under the chat panel">
-        <input id="shadowEnabled" type="checkbox" />
-        <span>Drop shadow (panel)</span>
-      </label>
-      <label class="row" style="gap:8px;" title="Draw a thin border around the chat panel">
-        <input id="outlineEnabled" type="checkbox" />
-        <span>Background outline</span>
-      </label>
+      <label class="row" title="Show a translucent background behind chat"><span>Background color</span><input id="bgEnabled" type="checkbox" /></label>
+      <label class="row" title="Blur the video behind the chat background"><span>Background blur</span><input id="blurEnabled" type="checkbox" /></label>
+      <label class="row" title="Cast a drop shadow under the chat panel"><span>Drop shadow (panel)</span><input id="shadowEnabled" type="checkbox" /></label>
+      <label class="row" title="Draw a thin border around the chat panel"><span>Background outline</span><input id="outlineEnabled" type="checkbox" /></label>
     </div>
     <div class="card">
       <label title="Add a drop shadow or outline to chat text for legibility over bright video">Text style</label>
@@ -180,17 +195,14 @@ word2"></textarea>
         <option value="shadow">Drop shadow</option>
         <option value="outline">Outline</option>
       </select>
-      <label class="row" style="gap:8px; margin-top:8px;">
-        <input id="boldText" type="checkbox" />
-        <span>Bold text</span>
-      </label>
+      <label class="row"><span>Bold text</span><input id="boldText" type="checkbox" /></label>
     </div>
     <div class="card" title="Opacity of the chat background">
-      <label>Background opacity (<span id="opacityVal"></span>)</label>
+      <div class="sliderhead"><label style="width:auto;">Background opacity</label><span class="val" id="opacityVal"></span></div>
       <input id="opacity" type="range" min="0" max="100" step="1" />
     </div>
     <div class="card" title="Strength of the background blur in pixels">
-      <label>Background blur radius (<span id="blurRadiusVal"></span>)</label>
+      <div class="sliderhead"><label style="width:auto;">Background blur radius</label><span class="val" id="blurRadiusVal"></span></div>
       <input id="blurRadius" type="range" min="0" max="20" step="1" />
     </div>
     <div class="card" title="Chat text size in pixels">
@@ -220,6 +232,67 @@ word2"></textarea>
         <button id="hotkeyFocusClear" class="secondary">Clear</button>
       </div>
       <div class="hint">Requires a modifier such as Ctrl Alt Shift or Meta. Saved globally.</div>
+    </div>
+    <div class="card" title="HOLD this key to pause autoscroll; release it to resume and snap to the latest message">
+      <label>Hold to pause autoscroll</label>
+      <div class="row">
+        <input id="hotkeyPauseScroll" placeholder="e.g. S, Space, or hold Alt (click then press)" readonly />
+        <button id="hotkeyPauseScrollCapture">Capture</button>
+        <button id="hotkeyPauseScrollClear" class="secondary">Clear</button>
+      </div>
+      <div class="hint">A single key is fine (no modifier needed). Hold to pause, release to resume.</div>
+    </div>
+  </section>
+
+  <!-- Reset -->
+  <section class="panel" data-tab="reset">
+    <div class="card" title="Disconnect your Twitch account and return to anonymous read-only mode">
+      <label>Twitch account</label>
+      <div class="hint">Remove the stored OAuth token and go back to anonymous read-only.</div>
+      <div class="row">
+        <button id="resetDisconnect" class="secondary">Disconnect Twitch</button>
+        <span id="resetDisconnectMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Restore the built-in YouTube and Kick → Twitch channel mappings">
+      <label>Channel mappings</label>
+      <div class="hint">Restore the default YouTube &amp; Kick → Twitch mappings (discards your edits).</div>
+      <div class="row">
+        <button id="resetMappings" class="secondary">Reset mappings</button>
+        <span id="resetMappingsMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Clear per-channel emote-highlight threshold and window overrides; global defaults are kept">
+      <label>Per-channel highlight overrides</label>
+      <div class="hint">Clear per-channel emote-highlight threshold &amp; window overrides (global defaults kept).</div>
+      <div class="row">
+        <button id="resetThresholds" class="secondary">Clear channel overrides</button>
+        <span id="resetThresholdsMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Delete saved emote surge markers for every video/channel">
+      <label>Stored emote markers</label>
+      <div class="hint">Delete saved emote surge markers (replayed on VODs).</div>
+      <div class="row">
+        <button id="resetEmoteMarkers" class="secondary">Clear emote markers</button>
+        <span id="resetEmoteMarkersMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Delete the saved chat-intensity wave for every video/channel">
+      <label>Stored highlight timeline</label>
+      <div class="hint">Delete the saved chat-intensity wave (replayed on VODs).</div>
+      <div class="row">
+        <button id="resetDensity" class="secondary">Clear timeline data</button>
+        <span id="resetDensityMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Erase ALL Meridian data: settings, Twitch account, mappings, and stored highlights">
+      <label>Reset everything</label>
+      <div class="hint">Erase all Meridian data — settings, Twitch account, mappings, and stored highlights. The active tab reloads.</div>
+      <div class="row">
+        <button id="resetAll" class="danger">Reset extension</button>
+        <span id="resetAllMsg" class="hint" style="width:auto;"></span>
+      </div>
     </div>
   </section>
 

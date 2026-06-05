@@ -108,6 +108,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           await clearStoredAuth();
           sendResponse({ ok: true });
           return;
+        case "STREAM_INFO": {
+          // Live viewer count via Helix Get Streams. Done here (not the content script) so it uses
+          // the extension's host permission for api.twitch.tv and the stored OAuth token.
+          const login = String(msg.login || "").toLowerCase();
+          const stored = await getStoredAuth();
+          if (!login || !stored?.accessToken || !stored?.clientId) { sendResponse({ ok: false }); return; }
+          try {
+            const r = await fetch(`https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(login)}`, {
+              headers: { Authorization: `Bearer ${stored.accessToken}`, "Client-Id": stored.clientId }
+            });
+            const j = await r.json();
+            const s = j?.data?.[0];
+            sendResponse({ ok: true, live: !!s, viewers: s?.viewer_count ?? null });
+          } catch (e) {
+            sendResponse({ ok: false, error: String(e?.message || e) });
+          }
+          return;
+        }
         case "AUTH_STATUS": {
           const stored = await getStoredAuth();
           const connected = Boolean(stored?.accessToken);
