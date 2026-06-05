@@ -21,6 +21,7 @@
     <button class="tab" data-tab="chat">Chat</button>
     <button class="tab" data-tab="appearance">Appearance</button>
     <button class="tab" data-tab="hotkeys">Hotkeys</button>
+    <button class="tab" data-tab="reset">Reset</button>
   </div>
 
   <!-- General -->
@@ -64,15 +65,13 @@
     </div>
     <div class="card" id="ytMappingsCard" title="Map this page's YouTube handle to a Twitch channel, joined automatically">
       <label>YouTube → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
-      <textarea id="mappings" rows="8" spellcheck="false" placeholder="@ESLCS = eslcs
-xqc = xqc"></textarea>
+      <textarea id="mappings" rows="8" spellcheck="false" placeholder="@eslcs = eslcs"></textarea>
       <button id="saveMappings">Save mappings</button>
       <span id="mappingsMsg" class="hint"></span>
     </div>
     <div class="card" id="kickMappingsCard" title="Map a Kick slug to a Twitch channel, joined automatically">
       <label>Kick → Twitch mappings (one per line: <code>slug = twitch_channel</code>)</label>
-      <textarea id="kickMappings" rows="8" spellcheck="false" placeholder="@xqc = xqc
-destiny = destiny"></textarea>
+      <textarea id="kickMappings" rows="8" spellcheck="false" placeholder="@eslcs = eslcs"></textarea>
       <button id="saveKickMappings">Save mappings</button>
       <span id="kickMappingsMsg" class="hint"></span>
     </div>
@@ -112,8 +111,8 @@ destiny = destiny"></textarea>
         <span>Highlight timeline (chat-activity wave)</span>
         <input id="highlightTimeline" type="checkbox" />
       </label>
-      <label class="row" title="Place emote surges on the wave. Click one to jump to that moment">
-        <span>Emote highlights (emotes on the wave)</span>
+      <label class="row" title="Mark emote surges on the seekbar (works with or without the wave). Click one to jump to that moment">
+        <span>Emote highlights (emote surge markers)</span>
         <input id="highlightEnabled" type="checkbox" />
       </label>
       <label class="row" title="Color of the activity wave and emote markers">
@@ -233,6 +232,67 @@ word2"></textarea>
         <button id="hotkeyFocusClear" class="secondary">Clear</button>
       </div>
       <div class="hint">Requires a modifier such as Ctrl Alt Shift or Meta. Saved globally.</div>
+    </div>
+    <div class="card" title="HOLD this key to pause autoscroll; release it to resume and snap to the latest message">
+      <label>Hold to pause autoscroll</label>
+      <div class="row">
+        <input id="hotkeyPauseScroll" placeholder="e.g. S, Space, or hold Alt (click then press)" readonly />
+        <button id="hotkeyPauseScrollCapture">Capture</button>
+        <button id="hotkeyPauseScrollClear" class="secondary">Clear</button>
+      </div>
+      <div class="hint">A single key is fine (no modifier needed). Hold to pause, release to resume.</div>
+    </div>
+  </section>
+
+  <!-- Reset -->
+  <section class="panel" data-tab="reset">
+    <div class="card" title="Disconnect your Twitch account and return to anonymous read-only mode">
+      <label>Twitch account</label>
+      <div class="hint">Remove the stored OAuth token and go back to anonymous read-only.</div>
+      <div class="row">
+        <button id="resetDisconnect" class="secondary">Disconnect Twitch</button>
+        <span id="resetDisconnectMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Restore the built-in YouTube and Kick → Twitch channel mappings">
+      <label>Channel mappings</label>
+      <div class="hint">Restore the default YouTube &amp; Kick → Twitch mappings (discards your edits).</div>
+      <div class="row">
+        <button id="resetMappings" class="secondary">Reset mappings</button>
+        <span id="resetMappingsMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Clear per-channel emote-highlight threshold and window overrides; global defaults are kept">
+      <label>Per-channel highlight overrides</label>
+      <div class="hint">Clear per-channel emote-highlight threshold &amp; window overrides (global defaults kept).</div>
+      <div class="row">
+        <button id="resetThresholds" class="secondary">Clear channel overrides</button>
+        <span id="resetThresholdsMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Delete saved emote surge markers for every video/channel">
+      <label>Stored emote markers</label>
+      <div class="hint">Delete saved emote surge markers (replayed on VODs).</div>
+      <div class="row">
+        <button id="resetEmoteMarkers" class="secondary">Clear emote markers</button>
+        <span id="resetEmoteMarkersMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Delete the saved chat-intensity wave for every video/channel">
+      <label>Stored highlight timeline</label>
+      <div class="hint">Delete the saved chat-intensity wave (replayed on VODs).</div>
+      <div class="row">
+        <button id="resetDensity" class="secondary">Clear timeline data</button>
+        <span id="resetDensityMsg" class="hint" style="width:auto;"></span>
+      </div>
+    </div>
+    <div class="card" title="Erase ALL Meridian data: settings, Twitch account, mappings, and stored highlights">
+      <label>Reset everything</label>
+      <div class="hint">Erase all Meridian data — settings, Twitch account, mappings, and stored highlights. The active tab reloads.</div>
+      <div class="row">
+        <button id="resetAll" class="danger">Reset extension</button>
+        <span id="resetAllMsg" class="hint" style="width:auto;"></span>
+      </div>
     </div>
   </section>
 

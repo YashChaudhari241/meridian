@@ -1,3 +1,5 @@
+import { DEFAULT_MAPPINGS, DEFAULT_KICK_MAPPINGS } from "./mappings.js";
+
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const PREFS_KEY = "meridian.prefs";
@@ -79,17 +81,11 @@ $("#extensionEnabled").addEventListener("change", async (e) => {
 });
 
 // ---------- prefs load/save ----------
-// Default YouTube handle / Kick slug → Twitch channel mappings (mirrors content.js DEFAULT_MAPPINGS).
-const DEFAULT_MAPPINGS = {
-  eslcs: "eslcs", pgl: "pgl", blastpremier: "blastpremier",
-  starladder_cs: "starladder_cs_en", starladder: "starladder_cs_en",
-  valorantesports: "valorant", tenz: "tenz", ohnepixel: "ohnepixel"
-};
-const DEFAULT_KICK_MAPPINGS = { xqc: "xqc", destiny: "destiny" };
+// Default YouTube handle / Kick slug → Twitch channel mappings — shared with content.js (one source).
 const defaults = {
   channel: "", mappings: { ...DEFAULT_MAPPINGS }, kickMappings: { ...DEFAULT_KICK_MAPPINGS }, overrideChannel: "",
   chatDelaySec: 0, updateFrequencyMs: 0, autoscroll: true,
-  hotkeyToggle: "", hotkeyFocus: "",
+  hotkeyToggle: "", hotkeyFocus: "", hotkeyPauseScroll: "",
   opacity: 0.51, fontSize: 13, blurRadius: 0, maxMessages: 300,
   blurEnabled: false, bgEnabled: true, shadowEnabled: false, outlineEnabled: true,
   boundToPlayer: true,
@@ -151,6 +147,7 @@ async function loadAllFields() {
   $("#outlineEnabled").checked = p.outlineEnabled !== false;
   $("#hotkeyToggle").value = p.hotkeyToggle || "";
   $("#hotkeyFocus").value = p.hotkeyFocus || "";
+  $("#hotkeyPauseScroll").value = p.hotkeyPauseScroll || "";
   $("#boundToPlayer").checked = p.boundToPlayer !== false;
   $("#ytLoadOn").value = p.ytLoadOn === "all" ? "all" : "live";
   $("#hideDeleted").checked = p.hideDeleted === true;
@@ -206,15 +203,21 @@ async function loadAllFields() {
   $("#emoteFfz").checked = p.emoteFfz !== false;
   $("#textStyle").value = p.textStyle || "none";
   $("#boldText").checked = p.boldText === true;
-  syncHighlightGating(p.highlightTimeline === true);
+  syncHighlightGating();
 }
-// Emote highlights only make sense when the wave is on.
-function syncHighlightGating(timelineOn) {
-  for (const sel of ["#highlightEnabled", "#highlightAnchorLive", "#highlightPersistEmotes", "#highlightPersistDensity"]) {
+// Emote highlights can run independently of the chat-activity wave (the markers just render with no
+// wave drawn behind them). Each dependent option is gated on whichever layer it actually affects.
+function syncHighlightGating() {
+  const timelineOn = $("#highlightTimeline").checked;
+  const emotesOn = $("#highlightEnabled").checked;
+  const gate = (sel, on) => {
     const dep = $(sel);
-    dep.disabled = !timelineOn;
-    dep.closest("label").style.opacity = timelineOn ? "" : "0.5";
-  }
+    dep.disabled = !on;
+    dep.closest("label").style.opacity = on ? "" : "0.5";
+  };
+  gate("#highlightAnchorLive", timelineOn || emotesOn); // shifts both layers into the past
+  gate("#highlightPersistDensity", timelineOn);          // wave only
+  gate("#highlightPersistEmotes", emotesOn);             // emote markers only
 }
 
 // ---------- General ----------
@@ -242,10 +245,10 @@ async function initSiteCard() {
   const card = $("#siteCard");
   const sel = $("#siteMode");
   const isYouTube = activeHost ? /(^|\.)youtube\.com$/.test(activeHost) : false;
-  const isKick = activeHost ? /(^|\.)kick\.com$/.test(activeHost) : false;
   $("#ytLoadOnCard").style.display = isYouTube ? "" : "none";
-  $("#ytMappingsCard").style.display = isYouTube ? "" : "none";
-  $("#kickMappingsCard").style.display = isKick ? "" : "none";
+  // Mappings are editable from ANY site (not just youtube.com / kick.com), so both editors show always.
+  $("#ytMappingsCard").style.display = "";
+  $("#kickMappingsCard").style.display = "";
   if (!activeHost || !/^https?:/.test(activeTab?.url || "")) {
     card.style.display = "none"; sel.disabled = true; return;
   }
@@ -319,12 +322,13 @@ $("#saveMaxMessages").addEventListener("click", async () => {
 $("#hideDeleted").addEventListener("change", async (e) => { await setPrefs({ hideDeleted: e.target.checked }); });
 $("#showViewers").addEventListener("change", async (e) => { await setPrefs({ showViewers: e.target.checked }); });
 $("#highlightTimeline").addEventListener("change", async (e) => {
-  const on = e.target.checked;
-  await setPrefs(on ? { highlightTimeline: true } : { highlightTimeline: false, highlightEnabled: false });
-  if (!on) $("#highlightEnabled").checked = false;
-  syncHighlightGating(on);
+  await setPrefs({ highlightTimeline: e.target.checked });
+  syncHighlightGating();
 });
-$("#highlightEnabled").addEventListener("change", async (e) => { await setPrefs({ highlightEnabled: e.target.checked }); });
+$("#highlightEnabled").addEventListener("change", async (e) => {
+  await setPrefs({ highlightEnabled: e.target.checked });
+  syncHighlightGating();
+});
 $("#highlightAnchorLive").addEventListener("change", async (e) => { await setPrefs({ highlightAnchorLive: e.target.checked }); });
 $("#highlightPersistEmotes").addEventListener("change", async (e) => { await setPrefs({ highlightPersistEmotes: e.target.checked }); });
 $("#highlightPersistDensity").addEventListener("change", async (e) => { await setPrefs({ highlightPersistDensity: e.target.checked }); });
@@ -461,6 +465,40 @@ function bindHotkey(prefKey, inputSel, captureSel, clearSel) {
 }
 bindHotkey("hotkeyToggle", "#hotkeyToggle", "#hotkeyToggleCapture", "#hotkeyToggleClear");
 bindHotkey("hotkeyFocus",  "#hotkeyFocus",  "#hotkeyFocusCapture",  "#hotkeyFocusClear");
+
+// Like comboFromEvent but allows a BARE single key (and a lone modifier) — for the hold-to-pause
+// hotkey. Must match content.js's hotkeySpecFromEvent so saved specs compare equal at runtime.
+function hotkeySpecFromEvent(e) {
+  const k = e.key;
+  if (["Control","Alt","Shift","Meta"].includes(k)) return k; // lone modifier
+  const parts = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.metaKey) parts.push("Meta");
+  const named = k === " " ? "Space" : (k.length === 1 ? k.toUpperCase() : k);
+  parts.push(named);
+  return parts.join("+");
+}
+// Capture for the hold hotkey: a non-modifier key (alone or with modifiers) finalizes on keydown; a
+// lone modifier finalizes on keyup, so "hold Alt" can be captured without a follow-up key.
+function bindHoldHotkey(prefKey, inputSel, captureSel, clearSel) {
+  const input = $(inputSel);
+  let capturing = false, pendingMod = null;
+  const finalize = async (spec) => { capturing = false; pendingMod = null; input.value = spec; await setPrefs({ [prefKey]: spec }); };
+  $(captureSel).addEventListener("click", () => { capturing = true; pendingMod = null; input.value = "(press a key…)"; input.focus(); });
+  input.addEventListener("keydown", (e) => {
+    if (!capturing) { e.preventDefault(); return; }
+    e.preventDefault();
+    if (["Control","Alt","Shift","Meta"].includes(e.key)) { pendingMod = e.key; input.value = `(${e.key}…)`; return; }
+    finalize(hotkeySpecFromEvent(e));
+  });
+  input.addEventListener("keyup", (e) => {
+    if (capturing && pendingMod && e.key === pendingMod) finalize(pendingMod);
+  });
+  $(clearSel).addEventListener("click", async () => { capturing = false; pendingMod = null; input.value = ""; await setPrefs({ [prefKey]: "" }); });
+}
+bindHoldHotkey("hotkeyPauseScroll", "#hotkeyPauseScroll", "#hotkeyPauseScrollCapture", "#hotkeyPauseScrollClear");
 function comboFromEvent(e) {
   const parts = [];
   if (e.ctrlKey) parts.push("Ctrl");
@@ -473,6 +511,67 @@ function comboFromEvent(e) {
   parts.push(k.length === 1 ? k.toUpperCase() : k);
   return parts.join("+");
 }
+
+// ---------- Reset / clear data ----------
+function resetMsg(sel, text) {
+  const el = $(sel);
+  el.textContent = text;
+  setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, 2500);
+}
+async function removeByPrefix(...prefixes) {
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter((k) => prefixes.some((p) => k.startsWith(p)));
+  if (keys.length) await chrome.storage.local.remove(keys);
+  return keys.length;
+}
+$("#resetDisconnect").addEventListener("click", async () => {
+  await send("AUTH_DISCONNECT");
+  $("#authMsg").textContent = "";
+  refreshStatus();
+  resetMsg("#resetDisconnectMsg", "Disconnected ✓");
+});
+$("#resetMappings").addEventListener("click", async () => {
+  await setPrefs({ mappings: { ...DEFAULT_MAPPINGS }, kickMappings: { ...DEFAULT_KICK_MAPPINGS } });
+  loadAllFields();
+  resetMsg("#resetMappingsMsg", "Mappings reset ✓");
+});
+$("#resetThresholds").addEventListener("click", async () => {
+  await setPrefs({ highlightThresholds: {}, highlightWindows: {} });
+  resetMsg("#resetThresholdsMsg", "Channel overrides cleared ✓");
+});
+$("#resetEmoteMarkers").addEventListener("click", async () => {
+  const n = await removeByPrefix("meridian.highlights.");
+  resetMsg("#resetEmoteMarkersMsg", `Cleared ${n} marker set${n === 1 ? "" : "s"} ✓`);
+});
+$("#resetDensity").addEventListener("click", async () => {
+  const n = await removeByPrefix("meridian.density.");
+  resetMsg("#resetDensityMsg", `Cleared ${n} timeline${n === 1 ? "" : "s"} ✓`);
+});
+// Reset everything is destructive + hard to reverse — require a second confirming click.
+let resetAllArmed = false, resetAllTimer = null;
+function disarmResetAll() {
+  resetAllArmed = false;
+  if (resetAllTimer) { clearTimeout(resetAllTimer); resetAllTimer = null; }
+  const btn = $("#resetAll");
+  btn.classList.remove("armed");
+  btn.textContent = "Reset extension";
+}
+$("#resetAll").addEventListener("click", async () => {
+  if (!resetAllArmed) {
+    resetAllArmed = true;
+    const btn = $("#resetAll");
+    btn.classList.add("armed");
+    btn.textContent = "Click again to confirm";
+    resetAllTimer = setTimeout(disarmResetAll, 4000);
+    return;
+  }
+  disarmResetAll();
+  await chrome.storage.local.clear();
+  await loadAllFields();        // repaint the popup with defaults
+  refreshStatus();
+  if (activeTab?.id) chrome.tabs.reload(activeTab.id); // re-init the content script from defaults
+  resetMsg("#resetAllMsg", "Everything reset ✓");
+});
 
 // ---------- init ----------
 (async () => {

@@ -44,7 +44,7 @@ body {
 .tabs {
   display: flex;
   gap: 2px;
-  padding: 0 10px;
+  padding: 0 8px;
   border-bottom: 1px solid var(--border-1);
 }
 .tab {
@@ -52,7 +52,7 @@ body {
   background: transparent;
   border: 0;
   color: var(--fg-3);
-  padding: 8px 9px 10px;
+  padding: 8px 8px 10px;
   cursor: pointer;
   font-family: var(--font-sans);
   font-size: 12px;
@@ -154,6 +154,15 @@ button.secondary {
   color: var(--fg-2);
 }
 button.secondary:hover { background: var(--bg-4); }
+/* Destructive action (Reset everything). */
+button.danger {
+  background: transparent;
+  border: 1px solid rgba(229, 72, 77, 0.5);
+  color: #ff6b6f;
+}
+button.danger:hover { background: rgba(229, 72, 77, 0.14); }
+button.danger:active { background: rgba(229, 72, 77, 0.22); }
+button.danger.armed { background: #e5484d; border-color: #e5484d; color: #fff; }
 
 /* ---------- toggle switches (checkboxes styled as pills) ---------- */
 .card label.row, label.toggle {

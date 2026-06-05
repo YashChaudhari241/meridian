@@ -57,7 +57,8 @@
         "src/overlay.css",
         "src/twitch-irc.js",
         "src/emotes.js",
-        "src/highlights.js"
+        "src/highlights.js",
+        "src/mappings.js"
       ],
       "matches": [
         "https://www.youtube.com/*",

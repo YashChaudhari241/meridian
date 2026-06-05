@@ -21,6 +21,11 @@
     HighlightEngine = class { ingest(){} prune(){} reset(){} };
     DensityTracker = class { add(){} reset(){} resolutionFor(){ return 10; } series(){ return []; } };
   }
+  // Default channel mappings live in a shared module so the popup uses the exact same data.
+  let DEFAULT_MAPPINGS = {}, DEFAULT_KICK_MAPPINGS = {};
+  try {
+    ({ DEFAULT_MAPPINGS, DEFAULT_KICK_MAPPINGS } = await import(chrome.runtime.getURL("src/mappings.js")));
+  } catch { /* stale content script — fall back to empty defaults */ }
 
   const PREFS_KEY = "meridian.prefs";
   function defaultRect() {
@@ -35,22 +40,6 @@
       height
     };
   }
-  // Default YouTube handle / Kick slug → Twitch channel mappings (separate maps per site;
-  // keys are the lower-cased handle/slug, values the Twitch login).
-  const DEFAULT_MAPPINGS = {
-    eslcs: "eslcs",
-    pgl: "pgl",
-    blastpremier: "blastpremier",
-    starladder_cs: "starladder_cs_en",
-    starladder: "starladder_cs_en",
-    valorantesports: "valorant",
-    tenz: "tenz",
-    ohnepixel: "ohnepixel"
-  };
-  const DEFAULT_KICK_MAPPINGS = {
-    xqc: "xqc",
-    destiny: "destiny"
-  };
   const defaults = {
     channel: "",
     mappings: { ...DEFAULT_MAPPINGS },
@@ -63,6 +52,7 @@
     autoscroll: true,            // always on (no longer user-toggleable)
     hotkeyToggle: "",            // toggle chat visibility (= × / chat bubble)
     hotkeyFocus: "",             // show chat + focus the input
+    hotkeyPauseScroll: "",       // HOLD to pause autoscroll (single bare key allowed)
     blockedWords: [],
     hideDeleted: true,
     opacity: 0.51,
@@ -1087,7 +1077,7 @@
     }
     // Highlight cache cleared from the popup — drop in-memory markers for this video.
     if (highlightsKey && changes[highlightsKey] && changes[highlightsKey].newValue == null) {
-      highlights.clear(); hlEngine.reset(); renderEmotes();
+      highlights.clear(); hlEngine.reset(); markEmotesDirty(); renderEmotes();
     }
     if (changes[PREFS_KEY]) {
       const next = { ...defaults, ...(changes[PREFS_KEY].newValue || {}) };
@@ -1194,12 +1184,17 @@
       // Our re-layout (dock/undock + player resize nudge) is deferred a frame so it runs AFTER the
       // browser's fullscreen transition instead of competing with it — keeps the toggle smoother.
       requestAnimationFrame(() => {
+        // The seekbar resizes with fullscreen → FP changes → regroup the emote markers promptly
+        // (the 2 s loop would catch the width change too, just up to 2 s later).
+        markEmotesDirty(); scheduleEmoteRender();
         // In "auto" the effective mode flips (overlay⇄docked) with fullscreen — re-apply fully.
         if (siteMode() === "auto") { applyMode(); return; }
         if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
       });
     })
   );
+  // Window resize also changes the seekbar width → regroup the emote markers (debounced via rAF).
+  window.addEventListener("resize", () => { markEmotesDirty(); scheduleEmoteRender(); }, { passive: true });
 
   // --- hotkeys ---
   // 1. Toggle visibility — same as the × button / chat bubble (hide ⇄ return to the chosen mode).
@@ -1232,6 +1227,45 @@
       else focusChatInput();
     }
   }, true);
+
+  // --- hold-to-pause autoscroll ---
+  // A press-and-HOLD gesture (not a one-shot toggle), so it gets its own matcher that accepts a
+  // SINGLE bare key — "S", "Space", or even holding a lone modifier like "Alt". Holding the key
+  // freezes autoscroll; releasing it (or the window losing focus) resumes + snaps to the bottom.
+  let scrollHoldKey = null;          // the raw e.key currently holding the pause open, or null
+  let scrollHoldReleaseTimer = null; // deferred resume (so X11 autorepeat keyup+keydown can cancel it)
+  function isEditableTarget(el) {
+    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+  }
+  // A bare printable key (no modifier) would also type — don't hijack it while a field is focused.
+  function specIsBarePrintable(spec) { return !!spec && !spec.includes("+") && (spec === "Space" || spec.length === 1); }
+  function endScrollHold() {
+    if (scrollHoldReleaseTimer) { clearTimeout(scrollHoldReleaseTimer); scrollHoldReleaseTimer = null; }
+    if (!scrollHoldKey) return;
+    scrollHoldKey = null;
+    resumeAutoscroll(); // clears the paused state + snaps to the bottom to catch up
+  }
+  document.addEventListener("keydown", (e) => {
+    const spec = prefs.hotkeyPauseScroll;
+    if (!spec || hotkeySpecFromEvent(e) !== spec) return;
+    // Autorepeat (notably X11) fires keyup+keydown pairs while a key is held; a pending release here
+    // means this keydown is a repeat, not a re-press — cancel the release so the hold stays unbroken.
+    if (scrollHoldReleaseTimer) { clearTimeout(scrollHoldReleaseTimer); scrollHoldReleaseTimer = null; return; }
+    if (scrollHoldKey) return; // already holding
+    if (specIsBarePrintable(spec) && isEditableTarget(document.activeElement)) return; // let typing through
+    e.preventDefault();
+    scrollHoldKey = e.key;
+    setResumePill(true);
+  }, true);
+  document.addEventListener("keyup", (e) => {
+    if (!scrollHoldKey || e.key !== scrollHoldKey || scrollHoldReleaseTimer) return;
+    e.preventDefault();
+    // Defer slightly so an autorepeat keydown can cancel it; a real release fires after the delay.
+    scrollHoldReleaseTimer = setTimeout(() => { scrollHoldReleaseTimer = null; endScrollHold(); }, 60);
+  }, true);
+  // The keyup can be missed if focus leaves mid-hold (alt-tab, switching tabs) — never stay stuck.
+  window.addEventListener("blur", endScrollHold);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) endScrollHold(); });
 
   // --- inactivity → hide bars after 10s, blur input but keep typed text ---
   let idleTimer = null;
@@ -1321,10 +1355,22 @@
     scrollbarTimer = setTimeout(() => els.messages.classList.remove("scrolling"), 800);
   }
   function setResumePill(show) { els.resume.classList.toggle("show", !!show); }
+  // Snap to the bottom, then re-snap on the next frame. The messages use `content-visibility:auto`,
+  // so a freshly appended multiline row is still unrendered (measured as one line via
+  // `contain-intrinsic-size`) when we first read `scrollHeight` — the initial snap can land a line
+  // short and clip the row's second line below the fold. Once the row scrolls into view it lays out
+  // at its true height; the rAF re-snap (coalesced) corrects to the real bottom.
+  let pinRaf = 0;
+  function pinToBottom() {
+    const m = els.messages;
+    m.scrollTop = m.scrollHeight;
+    if (pinRaf) return;
+    pinRaf = requestAnimationFrame(() => { pinRaf = 0; els.messages.scrollTop = els.messages.scrollHeight; });
+  }
   function resumeAutoscroll() {
     userScrollUntil = 0;
     setResumePill(false);
-    els.messages.scrollTop = els.messages.scrollHeight;
+    pinToBottom();
   }
   els.messages.addEventListener("wheel", () => {
     if (prefs.autoscroll) { userScrollUntil = Date.now() + 8000; setResumePill(true); }
@@ -1374,6 +1420,23 @@
   // hot path a plain field read instead of re-resolving the channel + clamping every occurrence).
   function applyHighlightWindow() { hlEngine.windowMs = highlightWindow() * 1000; }
   let waveLayer = null;
+  // Emote-marker clustering is DECOUPLED from positioning. `emoteMarkers` is the current grouping
+  // (each marker carries its leader, secondary list, +N, and reused DOM refs). It's recomputed only
+  // when "dirty" — a new/updated surge, a seekbar-width change (fullscreen / theater / window resize
+  // → FP changes), the wave layer being re-homed, or a 30 s safety timer (slow span-growth merges) —
+  // while the cheap per-tick position pass just slides the existing DOM along the scrolling seekbar.
+  let emoteMarkers = [];
+  let emoteRegroupDirty = true, emoteLastBarW = 0, emoteLastRegroupAt = 0, emoteBox = null;
+  let emoteRenderQueued = false;
+  const EMOTE_REGROUP_MS = 30000;
+  function markEmotesDirty() { emoteRegroupDirty = true; }
+  // rAF-debounced render so a burst of surges arriving in quick succession coalesces into ONE
+  // regroup+reposition instead of one per surge (the 2 s loop also drives renderEmotes directly).
+  function scheduleEmoteRender() {
+    if (emoteRenderQueued) return;
+    emoteRenderQueued = true;
+    requestAnimationFrame(() => { emoteRenderQueued = false; renderEmotes(); });
+  }
   let lastSeries = null, lastSpan = 0, lastStart = 0, lastOff = 0;
   let densityRes = 5, densityPeak = 1, lastPeakAt = 0, lastResAt = 0;
   // Cached seekbar stream-time live edge so the per-message hot path can timestamp density in the
@@ -1386,6 +1449,8 @@
     waveLayer.querySelectorAll("#meridianWaveGrad stop").forEach((st) => st.setAttribute("stop-color", c));
     const tl = waveLayer.querySelector(".meridian-wave-topline");
     if (tl) tl.setAttribute("stroke", c);
+    // Stems/dots carry the accent inline (set at regroup) — re-tint them on the next pass.
+    markEmotesDirty(); scheduleEmoteRender();
   }
   let highlightsKey = "";
   let saveHlTimer = null;
@@ -1430,7 +1495,11 @@
   // loadHighlights once persisted data for a non-live video has been read in.
   let replayLoaded = false;
   function waveActive() {
-    if (!(SITE.hasTimeline && prefs.highlightTimeline)) return false;
+    // The wave LAYER is active when EITHER the chat-activity wave or the emote markers are enabled —
+    // both share the seekbar coordinate + this layer. The wave PATH is only drawn when the timeline
+    // pref is on (see renderWave); emote markers render on their own with no wave behind them.
+    if (!SITE.hasTimeline) return false;
+    if (!(prefs.highlightTimeline || prefs.highlightEnabled)) return false;
     return isLiveStream() || replayLoaded;
   }
   // We only RECORD while genuinely live (on a VOD the IRC carries the channel's *current* chat,
@@ -1465,7 +1534,9 @@
     // use) so the wave and the emotes scroll/scale in exact lockstep and never drift apart. We
     // extrapolate the live edge forward from the last sample by wall-clock elapsed.
     if (m.self || !densityArmed || !atLiveCached || liveEdgeVt <= 0) return; // pause when replaying behind live
-    density.add(liveEdgeVt + (Date.now() - liveEdgeAt) / 1000, 1);
+    // Only feed the density wave when the timeline is on; the emote engine still ingests below so
+    // emote markers work even with the wave off.
+    if (prefs.highlightTimeline) density.add(liveEdgeVt + (Date.now() - liveEdgeAt) / 1000, 1);
     if (!prefs.highlightEnabled) return;
     const user = (m.user || "").toLowerCase();
     const seen = new Set();
@@ -1502,13 +1573,17 @@
     // HIGHLIGHT_CAP (Map preserves insertion order → evict the oldest). Matches the storage cap so
     // nothing extra lingers in RAM. Clustering already limits what's *rendered* to ~50.
     while (highlights.size > HIGHLIGHT_CAP) highlights.delete(highlights.keys().next().value);
-    renderEmotes();
+    // A new surge changes group membership → regroup. rAF-coalesced so a burst is one regroup.
+    markEmotesDirty(); scheduleEmoteRender();
     scheduleSaveHighlights();
   }
   function bumpHighlight(u) {
     const rec = highlights.get(u.key);
     if (!rec) return;
-    rec.count = u.count; // picked up by the next renderEmotes() pass (2 s loop)
+    rec.count = u.count;
+    // A count bump can change which surge leads a cluster / the +N set, but it's not urgent — let the
+    // 2 s loop pick it up (mark dirty so that pass regroups rather than only repositioning).
+    markEmotesDirty();
     scheduleSaveHighlights();
   }
 
@@ -1609,6 +1684,14 @@
   function renderWave() {
     const s = videoSeekable();
     if (!waveLayer || !s) return;
+    // Emote-markers-only mode: the layer is up to host the markers, but no wave is drawn. Clear any
+    // existing path and drop the cached series so emotes perch at the flat fallback height.
+    if (!prefs.highlightTimeline) {
+      waveLayer.querySelector(".meridian-wave-path")?.setAttribute("d", "");
+      waveLayer.querySelector(".meridian-wave-topline")?.setAttribute("d", "");
+      lastSeries = null;
+      return;
+    }
     const w = streamWindow(s);
     const series = density.series(w.start, w.end, densityRes);
     lastSeries = series; lastSpan = w.span; lastStart = s.start; lastOff = w.off;
@@ -1779,17 +1862,43 @@
     if (surgeTip) surgeTip.style.display = "none";
   }
 
+  // Orchestrator (2 s loop + rAF schedule). Two phases: GROUP (rebuild clusters + reconcile DOM) and
+  // POSITION (slide existing DOM along the scrolling seekbar). Grouping only runs when something that
+  // can change cluster membership happened — a new/updated surge (dirty flag), a seekbar-width change
+  // (fullscreen / theater / window resize → the FP footprint changes), the wave layer being re-homed
+  // (our DOM refs are gone), or the 30 s safety timer (slow span-growth merges of stable markers).
+  // Positioning is cheap and runs every pass. This keeps the per-tick cost off the DOM-rebuild path.
   function renderEmotes() {
     if (!waveLayer) return;
     const box = waveLayer.querySelector(".meridian-wave-emotes");
     const s = videoSeekable();
-    if (!emoteHighlightsActive() || !s) { box.replaceChildren(); return; }
+    if (!emoteHighlightsActive() || !s) {
+      if (box.firstChild) box.replaceChildren();
+      emoteMarkers = []; emoteBox = box; emoteRegroupDirty = true; emoteLastBarW = 0;
+      return;
+    }
+    const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
+    const now = Date.now();
+    const boxChanged = box !== emoteBox;
+    const widthChanged = barW !== emoteLastBarW;
+    if (boxChanged) emoteMarkers = []; // layer was rebuilt → old DOM refs point at a detached node
+    if (emoteRegroupDirty || boxChanged || widthChanged || (now - emoteLastRegroupAt) >= EMOTE_REGROUP_MS) {
+      regroupEmotes(box, s, barW);
+      emoteRegroupDirty = false; emoteBox = box; emoteLastBarW = barW; emoteLastRegroupAt = now;
+    }
+    positionEmotes(s);
+  }
+
+  // GROUP: cluster the visible surges and reconcile the DOM against the previous grouping (reusing
+  // each marker's stem/dot/emote/img by leader key, so the expensive <img> elements aren't recreated
+  // every regroup). The clustering math is identical to before — only its scheduling + the DOM reuse
+  // changed.
+  function regroupEmotes(box, s, barW) {
     const recs = [];
     for (const rec of highlights.values()) {
       const frac = highlightFrac(rec, s);
       if (frac != null && frac >= 0 && frac <= 1) recs.push({ rec, frac });
     }
-    const barW = SITE.findSeekbar?.()?.offsetWidth || 600;
 
     // One emote's footprint as a fraction of the bar. Markers are CENTERED and wide emotes render
     // up to 40px across (the `.meridian-wave-emote img` max-width), so a footprint based on the
@@ -1837,55 +1946,93 @@
 
     markers.sort((a, b) => a.frac - b.frac);
 
+    // Reconcile DOM keyed by leader. Reuse a marker's nodes when the same surge still leads its
+    // cluster (its emote image is unchanged); build fresh ones otherwise; drop the rest.
     const accent = waveColor();
-    const frag = document.createDocumentFragment();
+    const prev = new Map();
+    for (const m of emoteMarkers) prev.set(m.lead.key, m);
     for (const m of markers) {
-      const lead = m.lead, frac = m.frac, laneY = WAVE_GEO.lanes[0];
+      const reuse = prev.get(m.lead.key);
+      if (reuse) { m.els = reuse.els; prev.delete(m.lead.key); }
+      else m.els = buildMarkerEls(box);
+      applyMarkerContent(m, accent);
+    }
+    for (const gone of prev.values()) { gone.els.stem.remove(); gone.els.dot.remove(); gone.els.el.remove(); }
+    emoteMarkers = markers;
+  }
+
+  // Build the (positionless) DOM for one marker. Listeners read the marker via `el._m` (set in
+  // applyMarkerContent) so a reused element always reflects its CURRENT cluster, not the one it was
+  // first built for.
+  function buildMarkerEls(box) {
+    const stem = document.createElement("div");
+    stem.className = "meridian-wave-stem";
+    const dot = document.createElement("div");
+    dot.className = "meridian-wave-dot";
+    const el = document.createElement("div");
+    el.className = "meridian-wave-emote";
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    el.appendChild(img);
+    el.addEventListener("mouseenter", () => { const m = el._m; if (m) showSurgeTip(m.lead, m.frac, m.secondary); });
+    el.addEventListener("mousemove", () => { const m = el._m; if (m && surgeTipLead) { positionSurgeTip(m.frac); armSurgeTipIdle(); } });
+    el.addEventListener("mouseleave", hideSurgeTip);
+    if (SITE.canSeek === false) {
+      el.style.cursor = "default";
+    } else {
+      el.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); const m = el._m; if (m) seekTo(highlightVt(m.lead)); });
+      el.addEventListener("mousedown", (e) => e.stopPropagation());
+    }
+    box.append(stem, dot, el);
+    return { stem, dot, el, img, badge: null, url: "" };
+  }
+
+  // Apply the leader's emote + accent + "+N" badge to a marker's (possibly reused) DOM, and point
+  // its listeners at this marker object.
+  function applyMarkerContent(m, accent) {
+    const els = m.els;
+    els.el._m = m;
+    els.stem.style.background = `linear-gradient(${accent}, transparent)`;
+    els.dot.style.background = accent;
+    if (els.url !== m.lead.url) { els.img.src = m.lead.url; els.url = m.lead.url; }
+    els.img.alt = m.lead.name;
+    if (m.others > 0) {
+      if (!els.badge) {
+        els.badge = document.createElement("span");
+        els.badge.className = "meridian-wave-badge";
+        els.el.appendChild(els.badge);
+      }
+      els.badge.textContent = "+" + m.others;
+      els.badge.style.display = "";
+    } else if (els.badge) {
+      els.badge.style.display = "none";
+    }
+  }
+
+  // POSITION: slide every live marker to its current fraction on the scrolling seekbar (cheap style
+  // writes only — no DOM creation). Markers whose leader has scrolled outside the visible bar are
+  // hidden until the next regroup drops them.
+  function positionEmotes(s) {
+    const laneY = WAVE_GEO.lanes[0];
+    for (const m of emoteMarkers) {
+      const frac = highlightFrac(m.lead, s);
+      const { stem, dot, el } = m.els;
+      if (frac == null || frac < 0 || frac > 1) {
+        if (el.style.display !== "none") stem.style.display = dot.style.display = el.style.display = "none";
+        continue;
+      }
+      if (el.style.display === "none") stem.style.display = dot.style.display = el.style.display = "";
+      m.frac = frac;
       const leftPct = (frac * 100) + "%";
       const crestPx = Math.max(2, waveHeightAtFrac(frac) * WAVE_GEO.band);
-
-      // Stem + dot tie this marker to its exact moment on the wave crest.
-      const stem = document.createElement("div");
-      stem.className = "meridian-wave-stem";
       stem.style.left = leftPct;
       stem.style.bottom = crestPx + "px";
       stem.style.height = Math.max(0, (laneY - WAVE_GEO.bubble / 2) - crestPx) + "px";
-      stem.style.background = `linear-gradient(${accent}, transparent)`;
-      const dot = document.createElement("div");
-      dot.className = "meridian-wave-dot";
       dot.style.left = leftPct;
       dot.style.bottom = crestPx + "px";
-      dot.style.background = accent;
-      frag.append(stem, dot);
-
-      const el = document.createElement("div");
-      el.className = "meridian-wave-emote";
       el.style.left = leftPct;
       el.style.bottom = laneY + "px";
-      const img = document.createElement("img");
-      img.src = lead.url; img.alt = lead.name; img.loading = "lazy";
-      el.appendChild(img);
-      if (m.others > 0) {
-        const badge = document.createElement("span");
-        badge.className = "meridian-wave-badge";
-        badge.textContent = "+" + m.others;
-        el.appendChild(badge);
-      }
-      el.addEventListener("mouseenter", () => showSurgeTip(lead, frac, m.secondary));
-      el.addEventListener("mousemove", () => { if (surgeTipLead) { positionSurgeTip(frac); armSurgeTipIdle(); } });
-      el.addEventListener("mouseleave", hideSurgeTip);
-      if (SITE.canSeek === false) {
-        el.style.cursor = "default";
-      } else {
-        el.addEventListener("click", (e) => {
-          e.stopPropagation(); e.preventDefault();
-          seekTo(highlightVt(lead));
-        });
-        el.addEventListener("mousedown", (e) => e.stopPropagation());
-      }
-      frag.appendChild(el);
     }
-    box.replaceChildren(frag);
   }
 
   // --- persistence (emote highlights only; the density wave is live/session-derived) ---
@@ -1933,7 +2080,7 @@
     const live = isLiveStream();
     // Bail only when the wave is entirely off (timeline pref or unsupported site). On a VOD we must
     // still read storage to discover whether there's an archived timeline to replay.
-    if (!(SITE.hasTimeline && prefs.highlightTimeline)) return;
+    if (!(SITE.hasTimeline && (prefs.highlightTimeline || prefs.highlightEnabled))) return;
     try {
       const wantEmotes = prefs.highlightPersistEmotes, wantDensity = prefs.highlightPersistDensity;
       const o = await chrome.storage.local.get([
@@ -1946,18 +2093,23 @@
     // On a finished VOD, flip on replay if anything was restored, so waveActive() turns true and the
     // 2 s loop starts drawing the archived wave/markers.
     if (!live) replayLoaded = (density.size > 0 || highlights.size > 0);
+    markEmotesDirty(); // highlight set was just swapped for this video → regroup
     renderEmotes();
   }
 
   // Called when the highlight prefs change (toggle on/off).
   function refreshHighlightState() {
     highlightsKey = ""; densityKey = ""; lastResAt = 0; lastPeakAt = 0;
-    if (SITE.hasTimeline && prefs.highlightTimeline) {
+    if (SITE.hasTimeline && (prefs.highlightTimeline || prefs.highlightEnabled)) {
       loadHighlights();
     } else {
-      // Wave turned off entirely — tear down immediately.
+      // Both layers off — tear down immediately.
       replayLoaded = false;
-      if (waveLayer) waveLayer.style.display = "none";
+      if (waveLayer) {
+        waveLayer.style.display = "none";
+        waveLayer.querySelector(".meridian-wave-emotes")?.replaceChildren();
+      }
+      emoteMarkers = []; emoteRegroupDirty = true; emoteBox = null; emoteLastBarW = 0;
       highlights.clear(); hlEngine.reset(); density.reset();
     }
   }
@@ -1973,7 +2125,7 @@
     densityArmed = recordingActive();
     // Pick up video changes even while the wave is currently off — this is what lets a finished
     // livestream's VOD flip into replay (loadHighlights reads storage and sets `replayLoaded`).
-    if (SITE.hasTimeline && prefs.highlightTimeline && hlStorageKey() !== highlightsKey) loadHighlights();
+    if (SITE.hasTimeline && (prefs.highlightTimeline || prefs.highlightEnabled) && hlStorageKey() !== highlightsKey) loadHighlights();
     // Stream ended while watching (live → VOD, same videoId): keep showing what we already recorded.
     if (!isLiveStream() && !replayLoaded && (density.size > 0 || highlights.size > 0)) replayLoaded = true;
     if (!waveActive()) { if (waveLayer) waveLayer.style.display = "none"; markWaveOnPlayer(false); return; }
@@ -1984,7 +2136,7 @@
     const now = Date.now();
     // Keep density bounded. While recording with persistence on we keep (almost) the whole stream
     // so it can be replayed on the VOD; otherwise just the renderable window.
-    if (densityArmed) {
+    if (densityArmed && prefs.highlightTimeline) {
       const keepSec = prefs.highlightPersistDensity ? 12 * 3600 : Math.max(waveWindow(s), 600) + highlightOffset();
       density.pruneBefore(s.end - keepSec);
       scheduleSaveDensity();
@@ -2087,11 +2239,12 @@
 
     els.messages.appendChild(el);
     pruneOldMessages();
-    if (shouldAutoscroll()) els.messages.scrollTop = els.messages.scrollHeight;
+    if (shouldAutoscroll()) pinToBottom();
   }
 
   function shouldAutoscroll() {
     if (!prefs.autoscroll) return false;
+    if (scrollHoldKey) return false; // hold-to-pause hotkey is held down
     if (userScrollUntil && Date.now() < userScrollUntil) return false;
     return true;
   }
@@ -2495,6 +2648,20 @@
     if (e.metaKey) parts.push("Meta");
     if (parts.length === 0) return null;
     parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    return parts.join("+");
+  }
+  // Like comboFromEvent but allows a BARE key (no modifier) and a lone modifier — used by the
+  // hold-to-pause hotkey, which is a single-key hold gesture. Must match the popup's capture format.
+  function hotkeySpecFromEvent(e) {
+    const k = e.key;
+    if (["Control","Alt","Shift","Meta"].includes(k)) return k; // lone modifier held
+    const parts = [];
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    if (e.metaKey) parts.push("Meta");
+    const named = k === " " ? "Space" : (k.length === 1 ? k.toUpperCase() : k);
+    parts.push(named);
     return parts.join("+");
   }
 
