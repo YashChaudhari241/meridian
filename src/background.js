@@ -115,12 +115,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           const stored = await getStoredAuth();
           if (!login || !stored?.accessToken || !stored?.clientId) { sendResponse({ ok: false }); return; }
           try {
-            const r = await fetch(`https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(login)}`, {
-              headers: { Authorization: `Bearer ${stored.accessToken}`, "Client-Id": stored.clientId }
-            });
+            const hdrs = { Authorization: `Bearer ${stored.accessToken}`, "Client-Id": stored.clientId };
+            const r = await fetch(`https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(login)}`, { headers: hdrs });
             const j = await r.json();
             const s = j?.data?.[0];
-            sendResponse({ ok: true, live: !!s, viewers: s?.viewer_count ?? null });
+            let costreamViewers = 0;
+            const extras = (msg.costreamLogins || []).map((c) => String(c).toLowerCase()).filter((c) => c && c !== login);
+            if (extras.length) {
+              const q = extras.map((c) => `user_login=${encodeURIComponent(c)}`).join("&");
+              const r2 = await fetch(`https://api.twitch.tv/helix/streams?${q}`, { headers: hdrs });
+              const j2 = await r2.json();
+              for (const st of j2?.data || []) costreamViewers += st.viewer_count || 0;
+            }
+            const main = s?.viewer_count ?? 0;
+            sendResponse({
+              ok: true, live: !!s, viewers: main, costreamViewers,
+              totalViewers: main + costreamViewers
+            });
           } catch (e) {
             sendResponse({ ok: false, error: String(e?.message || e) });
           }

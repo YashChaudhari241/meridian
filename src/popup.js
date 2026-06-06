@@ -98,7 +98,10 @@ const defaults = {
   emote7tv: true, emoteBttv: true, emoteFfz: true,
   textStyle: "shadow", boldText: true,
   ytLoadOn: "live", hideYoutubeChat: false, disconnectOnHide: false,
-  markHighlightedMsgs: true, autoShowHide: false, autoShowWindowSec: 5, autoShowVisibleSec: 8
+  markHighlightedMsgs: true, autoShowHide: false, autoShowWindowSec: 5, autoShowVisibleSec: 8,
+  autoShowSurgeFactor: 3, autoShowMinRate: 4,
+  floatingReactions: true, floatingReactionPath: 100,
+  includeCostreamViewers: false, costreamChannels: []
 };
 // Per-layout overlay/docked defaults — mirror content.js LAYOUT_MODE_DEFAULTS.
 const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
@@ -159,7 +162,13 @@ async function loadAllFields() {
   $("#autoShowHide").checked = p.autoShowHide === true;
   $("#autoShowWindow").value = p.autoShowWindowSec ?? 5;
   $("#autoShowVisible").value = p.autoShowVisibleSec ?? 8;
+  $("#autoShowSurgeFactor").value = p.autoShowSurgeFactor ?? 3;
+  $("#autoShowMinRate").value = p.autoShowMinRate ?? 4;
+  $("#floatingReactions").checked = p.floatingReactions !== false;
+  $("#floatingReactionPath").value = p.floatingReactionPath ?? 100;
   $("#showViewers").checked = p.showViewers === true;
+  $("#includeCostreamViewers").checked = p.includeCostreamViewers === true;
+  $("#costreamChannels").value = (p.costreamChannels || []).join("\n");
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
   $("#extensionEnabled").checked = p.extensionEnabled !== false;
   $("#highlightTimeline").checked = p.highlightTimeline === true;
@@ -384,7 +393,32 @@ $("#saveAutoShowVisible").addEventListener("click", async () => {
   $("#autoShowVisible").value = v;
   flash($("#saveAutoShowVisible"));
 });
+$("#saveAutoShowSurgeFactor").addEventListener("click", async () => {
+  const v = Math.max(1.1, Math.min(20, parseFloat($("#autoShowSurgeFactor").value) || 3));
+  await setPrefs({ autoShowSurgeFactor: v });
+  $("#autoShowSurgeFactor").value = v;
+  flash($("#saveAutoShowSurgeFactor"));
+});
+$("#saveAutoShowMinRate").addEventListener("click", async () => {
+  const v = Math.max(1, Math.min(100, parseInt($("#autoShowMinRate").value, 10) || 4));
+  await setPrefs({ autoShowMinRate: v });
+  $("#autoShowMinRate").value = v;
+  flash($("#saveAutoShowMinRate"));
+});
 $("#showViewers").addEventListener("change", async (e) => { await setPrefs({ showViewers: e.target.checked }); });
+$("#includeCostreamViewers").addEventListener("change", async (e) => { await setPrefs({ includeCostreamViewers: e.target.checked }); });
+$("#saveCostreamChannels").addEventListener("click", async () => {
+  const channels = $("#costreamChannels").value.split(/\r?\n/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+  await setPrefs({ costreamChannels: channels });
+  flash($("#saveCostreamChannels"));
+});
+$("#floatingReactions").addEventListener("change", async (e) => { await setPrefs({ floatingReactions: e.target.checked }); });
+$("#saveFloatingReactionPath").addEventListener("click", async () => {
+  const v = Math.max(40, Math.min(280, parseInt($("#floatingReactionPath").value, 10) || 100));
+  await setPrefs({ floatingReactionPath: v });
+  $("#floatingReactionPath").value = v;
+  flash($("#saveFloatingReactionPath"));
+});
 $("#highlightTimeline").addEventListener("change", async (e) => {
   await setPrefs({ highlightTimeline: e.target.checked });
   syncHighlightGating();

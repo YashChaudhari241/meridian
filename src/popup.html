@@ -167,6 +167,20 @@
     </details>
     <div class="card" title="Show the channel's live Twitch viewer count in a pill on the overlay. Requires connecting your Twitch account; updates about once a minute.">
       <label class="row"><span>Live viewer count (requires Twitch sign-in)</span><input id="showViewers" type="checkbox" /></label>
+      <label class="row" title="Add live viewer counts from co-stream partner channels (listed below). Twitch does not expose co-stream partners automatically — enter their logins manually.">
+        <span>Include co-stream viewer counts</span><input id="includeCostreamViewers" type="checkbox" />
+      </label>
+      <label style="margin-top:10px;" title="Twitch logins whose live viewer counts are summed with the mapped channel (one per line)">Co-stream channels</label>
+      <textarea id="costreamChannels" rows="3" spellcheck="false" placeholder="caster1&#10;caster2"></textarea>
+      <button id="saveCostreamChannels">Save</button>
+    </div>
+    <div class="card" title="While chat is hidden, emotes from incoming messages float out of the show-chat bubble">
+      <label class="row"><span>Floating reactions</span><input id="floatingReactions" type="checkbox" /></label>
+      <label style="margin-top:10px;" title="How far emotes travel from the bubble (pixels)">Reaction path length (px)</label>
+      <div class="row">
+        <input id="floatingReactionPath" type="number" min="40" max="280" step="10" />
+        <button id="saveFloatingReactionPath">Save</button>
+      </div>
     </div>
     <div class="card" title="When you hide the chat, also disconnect from Twitch. Off (default): hiding is visual only — emotes, highlights and the timeline keep processing in the background.">
       <label class="row"><span>Disconnect chat on hide</span><input id="disconnectOnHide" type="checkbox" /></label>
@@ -177,6 +191,16 @@
       <div class="row">
         <input id="autoShowWindow" type="number" min="1" max="60" step="1" />
         <button id="saveAutoShowWindow">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Messages/sec must exceed the recent baseline multiplied by this factor to trigger a reveal">Surge threshold multiplier</label>
+      <div class="row">
+        <input id="autoShowSurgeFactor" type="number" min="1.1" max="20" step="0.1" />
+        <button id="saveAutoShowSurgeFactor">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Absolute minimum messages/sec required even when the baseline is near zero">Minimum surge rate (msgs/sec)</label>
+      <div class="row">
+        <input id="autoShowMinRate" type="number" min="1" max="100" step="1" />
+        <button id="saveAutoShowMinRate">Save</button>
       </div>
       <label style="margin-top:10px;" title="How long the auto-revealed chat stays visible before hiding again">Stay visible for (seconds)</label>
       <div class="row">

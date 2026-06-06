@@ -614,6 +614,22 @@
 }
 .meridian-toggle.show { display: inline-flex; }
 
+.meridian-float-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483600;
+  pointer-events: none;
+  overflow: hidden;
+}
+.meridian-float-emote {
+  position: fixed;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
 .meridian-btn.active { color: #A98AFF; background: rgba(130, 87, 255, 0.16); }
 
 /* ---- Docked mode: an absolute overlay inside the site's native chat frame, with a tab bar

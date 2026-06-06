@@ -131,6 +131,12 @@
     autoShowHide: false,         // auto-reveal the chat (while hidden) during msg/sec surges
     autoShowWindowSec: 5,        // rolling window the surge rate is measured over (seconds)
     autoShowVisibleSec: 8,       // how long the auto-revealed chat stays visible before re-hiding
+    autoShowSurgeFactor: 3,      // msgs/sec must exceed baseline × this factor to count as a surge
+    autoShowMinRate: 4,          // absolute floor (msgs/sec) so a quiet→2-msg blip can't fire
+    floatingReactions: true,     // float emotes out of the show-chat bubble while chat is hidden
+    floatingReactionPath: 100,   // px travel distance for floating reaction emotes
+    includeCostreamViewers: false, // add configured co-stream channels' viewer counts to the pill
+    costreamChannels: [],        // Twitch logins whose live viewer counts are summed with the main channel
     bubblePos: null              // { left, top } of the draggable show-chat bubble (viewport coords)
   };
 
@@ -428,6 +434,9 @@
 
   document.documentElement.appendChild(root);
   document.documentElement.appendChild(toggleBtn);
+  const floatLayer = document.createElement("div");
+  floatLayer.className = "meridian-float-layer";
+  document.documentElement.appendChild(floatLayer);
 
   const els = {
     header: root.querySelector(".meridian-header"),
@@ -748,7 +757,25 @@
     return s;
   }
   function clearInput() { els.input.textContent = ""; }
-  function setInputText(str) { els.input.textContent = str || ""; focusInputEnd(); }
+  function setInputText(str) { fillInputFromText(str || ""); }
+  // Rebuild the contenteditable from plain text, swapping known emote tokens for inline chips.
+  function fillInputFromText(str) {
+    clearInput();
+    if (!str) { focusInputEnd(); return; }
+    const map = emoteReg?.currentMap();
+    const frag = document.createDocumentFragment();
+    for (const tok of str.split(/(\s+)/)) {
+      if (!tok) continue;
+      if (/^\s+$/.test(tok)) frag.appendChild(document.createTextNode(tok));
+      else {
+        const em = map?.get(tok);
+        if (em) frag.appendChild(makeInputEmote(tok, em.url));
+        else frag.appendChild(document.createTextNode(tok));
+      }
+    }
+    els.input.appendChild(frag);
+    focusInputEnd();
+  }
 
   // --- sent-message history (terminal-style Up/Down recall) ---
   // sentHistory[] holds past sent messages (oldest→newest). `histPos` walks it; histPos ===
@@ -963,6 +990,68 @@
     clearInput();
   }
 
+  // --- floating reactions (emotes drift out of the show-chat bubble while chat is hidden) ---
+  function emotesInMessage(m) {
+    const out = [];
+    const seen = new Set();
+    for (const e of m.emotes || []) {
+      if (e.name && e.id && !seen.has(e.name)) {
+        seen.add(e.name);
+        out.push({ name: e.name, url: `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/2.0` });
+      }
+    }
+    const map = emoteReg?.currentMap();
+    if (map?.size && m.text) {
+      for (const tok of m.text.split(/\s+/)) {
+        if (tok && !seen.has(tok)) {
+          const em = map.get(tok);
+          if (em) { seen.add(tok); out.push({ name: tok, url: em.url }); }
+        }
+      }
+    }
+    return out;
+  }
+  function maybeFloatingReaction(m) {
+    if (prefs.floatingReactions === false) return;
+    if (!toggleBtn.classList.contains("show")) return;
+    if (!irc || connState !== "joined") return;
+    if (effectiveMode() !== "hidden") return;
+    const emotes = emotesInMessage(m);
+    if (!emotes.length) return;
+    spawnFloatingReaction(emotes[Math.floor(Math.random() * emotes.length)].url);
+  }
+  function spawnFloatingReaction(url) {
+    const rect = toggleBtn.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const img = document.createElement("img");
+    img.className = "meridian-float-emote";
+    img.src = url;
+    img.style.left = cx + "px";
+    img.style.top = cy + "px";
+    floatLayer.appendChild(img);
+    const pathLen = Math.max(40, Math.min(280, prefs.floatingReactionPath | 0 || 100));
+    const angle = Math.random() * Math.PI * 2;
+    const perp = angle + Math.PI / 2;
+    const waveAmp = 10 + Math.random() * 14;
+    const waveFreq = 2.5 + Math.random() * 2.5;
+    const dur = 900 + Math.random() * 400;
+    const t0 = performance.now();
+    (function tick(now) {
+      const t = Math.min(1, (now - t0) / dur);
+      const ease = 1 - (1 - t) ** 2;
+      const along = ease * pathLen;
+      const wave = Math.sin(t * Math.PI * waveFreq) * waveAmp * (1 - t);
+      const x = cx + Math.cos(angle) * along + Math.cos(perp) * wave;
+      const y = cy + Math.sin(angle) * along + Math.sin(perp) * wave;
+      img.style.transform = `translate(-50%, -50%) translate(${x - cx}px, ${y - cy}px) scale(${1 - t * 0.35})`;
+      img.style.opacity = String(1 - t * 0.85);
+      if (t < 1) requestAnimationFrame(tick);
+      else img.remove();
+    })(t0);
+  }
+
   // --- delay queue + update-frequency batching ---
   const queue = [];
   const renderBuffer = [];
@@ -989,6 +1078,7 @@
     }
     if (m.type === "msg" && !m.self) noteMsgForRate(m.ts);   // surge detection for auto show/hide
     if (m.type === "msg" && m.user) { addChatter(m.user, m.displayName); feedHighlights(m); }
+    if (m.type === "msg" && !m.self) maybeFloatingReaction(m);
     if (m.type === "msg" && !m.self && isBlocked(m.text)) return;
     if (m.self || (prefs.chatDelaySec || 0) <= 0) { scheduleRender(m); return; }
     queue.push(m);
@@ -1223,18 +1313,28 @@
     if (n < 1e6) return (n / 1e3).toFixed(1) + "K";
     return (n / 1e6).toFixed(1) + "M";
   }
-  function setViewers(n) {
+  function setViewers(n, extra) {
     if (n == null) { els.viewers.classList.remove("show"); return; }
     els.viewersCount.textContent = formatViewers(n);
+    els.viewers.title = extra ? `Live viewers on Twitch (${extra})` : "Live viewers on Twitch";
     els.viewers.classList.add("show");
   }
   async function fetchViewers() {
     if (!viewersEnabled() || !lastJoined) { setViewers(null); return; }
     if (!chrome.runtime?.id) { stopViewerPoll(); return; } // content script orphaned by an extension reload
     try {
-      const r = await chrome.runtime.sendMessage({ type: "STREAM_INFO", login: lastJoined });
+      const costream = (prefs.includeCostreamViewers && prefs.costreamChannels?.length)
+        ? prefs.costreamChannels.map((c) => String(c).toLowerCase()).filter(Boolean) : [];
+      const r = await chrome.runtime.sendMessage({
+        type: "STREAM_INFO", login: lastJoined, costreamLogins: costream
+      });
       if (!viewersEnabled()) return;                  // toggled off mid-flight
-      setViewers(r?.ok && r.live ? r.viewers : null); // hide when offline / failed
+      if (!r?.ok || !r.live) { setViewers(null); return; }
+      const main = r.viewers ?? 0;
+      const extra = r.costreamViewers ?? 0;
+      const total = r.totalViewers ?? main;
+      if (extra > 0) setViewers(total, `${formatViewers(main)} + ${formatViewers(extra)} co-stream`);
+      else setViewers(main);
     } catch { setViewers(null); }
   }
   function stopViewerPoll() { if (viewerTimer) { clearInterval(viewerTimer); viewerTimer = null; } }
@@ -1312,7 +1412,9 @@
         || next.highlightPersistEmotes !== prefs.highlightPersistEmotes
         || next.highlightPersistDensity !== prefs.highlightPersistDensity;
       const colorChanged = next.highlightColor !== prefs.highlightColor;
-      const viewersChanged = next.showViewers !== prefs.showViewers;
+      const viewersChanged = next.showViewers !== prefs.showViewers
+        || next.includeCostreamViewers !== prefs.includeCostreamViewers
+        || JSON.stringify(next.costreamChannels) !== JSON.stringify(prefs.costreamChannels);
       // Native-chat-hide changes can come from the legacy global flag or the per-site/per-layout map.
       const hideChatChanged = next.hideYoutubeChat !== prefs.hideYoutubeChat
         || JSON.stringify(next.sites?.[HOST]?.hideNative) !== JSON.stringify(prefs.sites?.[HOST]?.hideNative);
@@ -1333,7 +1435,7 @@
       if (boundChanged && effectiveMode() === "overlay") applyBoundMode();
       if (blocklistChanged) rebuildBlockSet();
       if (loadOnChanged) syncPageActive(); // live-only ⇄ all may mount/unmount this page
-      if (hideChatChanged) { hideChatKey = null; lastLayoutApplied = null; applyHideNativeChat(); applyMode(); } // re-arm + apply now
+      if (hideChatChanged) { hideNativeAppliedKey = null; lastLayoutApplied = null; applyHideNativeChatOnce(); applyMode(); }
       if (disconnectOnHideChanged) applyMode(); // connect/disconnect to match the new policy if hidden
       if (modeChanged || layoutModesChanged) applyMode();
       if (highlightChanged) refreshHighlightState();
@@ -1351,7 +1453,7 @@
     // service worker on reload), keep retrying on the 2 s poll instead of waiting for a manual
     // reconnect. The `connecting` guard inside ensureConnected makes overlapping calls a no-op.
     if (!irc && shouldConnect()) ensureConnected();
-    applyHideNativeChat();
+    applyHideNativeChatOnce();
     ensureNativeChatObserver();
     ensureLayoutObserver();
     const h = SITE.detectHandle();
@@ -1437,8 +1539,9 @@
     const win = autoShowWindowMs();
     while (rateStamps.length && rateStamps[0] < now - win) rateStamps.shift();
     const rate = rateStamps.length / (win / 1000);            // msgs/sec over the window
-    const MIN_RATE = 4;                                       // absolute floor so a quiet→2-msg blip can't fire
-    const surge = rate >= Math.max(baselineRate * 3, MIN_RATE);
+    const minRate = Math.max(1, prefs.autoShowMinRate | 0 || 4);
+    const factor = Math.max(1.1, prefs.autoShowSurgeFactor || 3);
+    const surge = rate >= Math.max(baselineRate * factor, minRate);
     baselineRate = baselineRate ? baselineRate * 0.8 + rate * 0.2 : rate; // slow EMA (after the test)
     if (surge && pageActive && effectiveMode() === "hidden" && !autoRevealed) {
       autoRevealed = true;
@@ -1464,6 +1567,13 @@
   function revealChat() {
     if (willDockOnShow()) { setNativeChat(true); dockChatTab = "twitch"; applyDockTab(); }
     return setHidden(false);
+  }
+  // User opened YouTube's own chat button while docked — show both panels, YouTube tab active.
+  function revealChatNative() {
+    clearAutoReveal();
+    dockChatTab = "native";
+    if (willDockOnShow() && !SITE.isNativeChatOpen?.()) setNativeChat(true);
+    return setHidden(false).then(() => { if (effectiveMode() === "docked") applyDockTab(); });
   }
   // Show chat (hotkey / bubble) — an explicit user action, so it also cancels any pending auto-hide.
   function showChat() { clearAutoReveal(); return revealChat(); }
@@ -2708,9 +2818,17 @@
     if (natChatObs) natChatObs.disconnect();
     natChatObsTarget = f;
     natChatObs = new MutationObserver(() => {
-      if (selfTogglingNative) return;                 // our own toggle → ignore
-      if (!SITE.isNativeChatOpen?.()) return;          // only react to the user OPENING it
-      if (effectiveMode() === "docked" && dockChatTab !== "native") { dockChatTab = "native"; applyDockTab(); }
+      if (selfTogglingNative) return;
+      if (layoutMode() !== "docked") return;           // visibility coupling is docked-only
+      const open = SITE.isNativeChatOpen?.();
+      if (open) {
+        if (siteHidden()) revealChatNative();
+        else if (dockChatTab !== "native") { dockChatTab = "native"; applyDockTab(); }
+      } else if (!siteHidden()) {
+        // User closed YouTube chat — hide ours too so docked visibility stays coupled.
+        clearAutoReveal();
+        setHidden(true);
+      }
     });
     natChatObs.observe(f, { attributes: true, attributeFilter: ["collapsed"] });
   }
@@ -2733,20 +2851,24 @@
     if (siteHidden()) return "hidden";
     return layoutMode();
   }
-  // "Hide the site's native chat by default" (per layout). Collapse the native chat for a short
-  // window each video once its frame exists — not continuously, so a later manual re-open isn't
-  // fought (YouTube re-enabling itself was a prior bug). Re-armed when the videoId OR layout changes.
-  let hideChatKey = null;
-  let hideChatUntil = 0;
-  function applyHideNativeChat() {
+  // "Hide the site's native chat by default" (per layout). One-shot per video+layout — only on
+  // initial page load or when the layout/video changes, never on the 2 s poll (so a manual
+  // re-open via YouTube's chat button isn't immediately fought).
+  let hideNativeAppliedKey = null;
+  function hideNativeKey() { return (SITE.videoId?.() || "") + "|" + currentLayout(); }
+  function markHideNativeApplied() { hideNativeAppliedKey = hideNativeKey(); }
+  function applyHideNativeChatOnce() {
     if (!hideNativeForLayout() || !SITE.nativeChatExists?.()) return;
-    const key = (SITE.videoId?.() || "") + "|" + currentLayout();
-    // Start a short window the first time this video/layout's chat frame exists. Re-collapse on
-    // every poll while open during the window — YouTube flaps the chat expanded/collapsed as it
-    // initializes, so a one-shot collapse loses the race. After the window we stop.
-    if (key !== hideChatKey) { hideChatKey = key; hideChatUntil = Date.now() + 15000; }
-    if (Date.now() > hideChatUntil) return;
-    if (SITE.isNativeChatOpen?.()) setNativeChat(false); // guarded so it doesn't flip our dock tab
+    const key = hideNativeKey();
+    if (key === hideNativeAppliedKey) return;
+    hideNativeAppliedKey = key;
+    if (SITE.isNativeChatOpen?.()) setNativeChat(false);
+    if (layoutMode() === "docked" && !siteHidden()) {
+      const sites = { ...(prefs.sites || {}) };
+      sites[HOST] = { ...(sites[HOST] || {}), hidden: true };
+      prefs.sites = sites;
+      savePrefs();
+    }
   }
   // Set the transient show/hide flag (bubble / × / hotkey). Kept separate from the per-layout mode
   // so revealing returns to the layout's chosen overlay/docked.
@@ -2782,6 +2904,7 @@
     if (layout === lastLayoutApplied) return;
     lastLayoutApplied = layout;
     if (!hideNativeForLayout(layout)) return;
+    markHideNativeApplied();
     setNativeChat(false);
     if (layoutMode(layout) === "docked" && !siteHidden()) {
       // Hide our overlay too. Write the flag directly (no applyMode re-dispatch — the caller, which
