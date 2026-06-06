@@ -28,6 +28,46 @@
   } catch { /* stale content script — fall back to empty defaults */ }
 
   const PREFS_KEY = "meridian.prefs";
+
+  // --- perf instrumentation (debug only; ~free when off) ---
+  // Toggle from the console: __meridianPerf.on=true; then read __meridianPerf for cumulative
+  // ms/calls per subsystem, or call __meridianPerf.report() for a per-second-rate snapshot.
+  const PERF = {
+    on: false,
+    t0: performance.now(),
+    msgs: 0, render: 0, feed: 0, wave: 0, emotes: 0, regroup: 0,
+    pins: 0, pinMs: 0, ingest: 0, dropped: 0,
+    reset() {
+      this.t0 = performance.now();
+      this.msgs = this.render = this.feed = this.wave = this.emotes = this.regroup = 0;
+      this.pins = this.pinMs = this.ingest = this.dropped = 0;
+    },
+    report() {
+      const sec = (performance.now() - this.t0) / 1000 || 1;
+      const r = (x) => Math.round(x * 10) / 10;
+      return {
+        windowSec: r(sec),
+        msgsPerSec: r(this.msgs / sec),
+        dropped: this.dropped,
+        // total ms spent in each subsystem over the window, and % of wall time it consumed
+        renderMs: r(this.render), feedMs: r(this.feed), waveMs: r(this.wave),
+        emotesMs: r(this.emotes), regroupMs: r(this.regroup), pinMs: r(this.pinMs),
+        pins: this.pins,
+        mainThreadPct: r((this.render + this.feed + this.wave + this.emotes + this.pinMs) / (sec * 10)),
+        perMsgRenderUs: r((this.render / Math.max(1, this.msgs)) * 1000),
+        // live state (closure-captured; resolved at call time)
+        domMsgs: els?.messages?.childElementCount || 0,
+        buffer: renderBuffer?.length || 0, queue: queue?.length || 0,
+        highlights: highlights?.size || 0, markers: emoteMarkers?.length || 0,
+      };
+    },
+  };
+  // Debug-only perf counters. Inert in production (`pnow()` short-circuits when off). To profile:
+  // open the content-script console and run `__meridianPerf.on=true; __meridianPerf.reset()`, then
+  // read `__meridianPerf.report()` after a few seconds (rates are normalized to the window).
+  window.__meridianPerf = PERF;
+  const pnow = () => (PERF.on ? performance.now() : 0);
+
   function defaultRect() {
     const vw = Math.max(640, window.innerWidth || 1280);
     const vh = Math.max(480, window.innerHeight || 720);
@@ -84,7 +124,14 @@
     textStyle: "shadow",         // chat text legibility: "none" | "shadow" | "outline"
     boldText: true,              // message body weight (names are always one step heavier)
     ytLoadOn: "live",            // YouTube: load chat on "live" (livestreams only) | "all" (any video)
-    showViewers: false           // show the channel's live Twitch viewer count (OAuth only; polled ~90s)
+    showViewers: false,          // show the channel's live Twitch viewer count (OAuth only; polled ~90s)
+    hideYoutubeChat: false,      // auto-collapse YouTube's native live chat on each video (YouTube only)
+    disconnectOnHide: false,     // when hidden, also disconnect IRC (off = keep processing emotes/highlights)
+    markHighlightedMsgs: true,   // visually mark channel-points "Highlight My Message" redemptions
+    autoShowHide: false,         // auto-reveal the chat (while hidden) during msg/sec surges
+    autoShowWindowSec: 5,        // rolling window the surge rate is measured over (seconds)
+    autoShowVisibleSec: 8,       // how long the auto-revealed chat stays visible before re-hiding
+    bubblePos: null              // { left, top } of the draggable show-chat bubble (viewport coords)
   };
 
   // Chatters for @-mention autocomplete (lcLogin → displayName). Seeded from the IRC
@@ -132,6 +179,25 @@
     // normal/theater/fullscreen — whereas #chat-container collapses to width:0 in theater).
     // We overlay our panel inside it, so we never restructure YouTube's chat layout.
     findDockAnchor: () => document.querySelector("ytd-live-chat-frame#chat"),
+    // Native live-chat open/close state + control. YouTube marks the frame `collapsed` when chat is
+    // hidden (verified live, normal + theater). The "Show chat / Hide chat" toggle is the button in
+    // `#show-hide-button`; clicking it flips the state. Used by hide-YT-chat-by-default, auto-mode
+    // fullscreen docking, and the docked show-chat hotkey.
+    nativeChatExists: () => !!document.querySelector("ytd-live-chat-frame#chat"),
+    isNativeChatOpen() {
+      const f = document.querySelector("ytd-live-chat-frame#chat");
+      return !!f && !f.hasAttribute("collapsed");
+    },
+    setNativeChatOpen(open) {
+      const f = document.querySelector("ytd-live-chat-frame#chat");
+      if (!f) return false;
+      if (!f.hasAttribute("collapsed") === !!open) return true; // already in the desired state
+      const btn = f.querySelector("#show-hide-button button")
+        || document.querySelector("ytd-live-chat-frame #show-hide-button button");
+      if (!btn) return false;
+      btn.click();
+      return true;
+    },
     nativeChatLabel: "YouTube",
     brandColor: "#FF0033",       // source-badge dot color on the docked tab
     // Timeline highlights (live DVR seekbar). Live detection: the player only renders a
@@ -260,7 +326,6 @@
   let connecting = false;          // guards ensureConnected against overlapping attempts
   let currentAuth = null;
   let emoteReg = null;
-  let lastVisibleMode = "overlay"; // restored when un-hiding via the bubble
   let dockRetryTimer = null;
   // Docked-mode tab switcher state (native site chat ⇄ our Twitch chat).
   let dockTabBar = null;
@@ -277,6 +342,11 @@
   let dockChatTab = "twitch";  // which chat is shown while docked; default to ours
   let pageActive = false;      // true only when the page actually has a video/stream player
   let appliedMode = "inactive"; // last display mode actually applied (drives auto re-apply)
+  let lastLayoutApplied = null;  // last YouTube layout we applied per-layout defaults for (declared
+                                 // early to avoid a TDZ: applyMode() runs during setup, below).
+  // Per-layout overlay/docked defaults, preserving the old "auto" behavior (docks when a chat column
+  // exists, floats in fullscreen). Declared early — effectiveMode()→layoutMode() reads it at setup.
+  const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
 
   // Blocklist: rebuilt from prefs whenever prefs.blockedWords changes.
   // O(1) membership check per word; O(n) per message (n = word count).
@@ -352,7 +422,9 @@
   const toggleBtn = document.createElement("button");
   toggleBtn.className = "meridian-toggle";
   toggleBtn.title = "Show Meridian chat";
-  toggleBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>`;
+  // Meridian logo mark (the wave + dot from src/assets/meridian-icon.svg — shape only; the bubble's
+  // own background color is kept, and the icon inherits it via currentColor).
+  toggleBtn.innerHTML = `<svg viewBox="0 0 512 512" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g transform="translate(256,256) scale(1.35) translate(-267,-255)"><path d="M 144 322 C 152.5 322.9 163.4 351.6 180 326 C 196.6 300.4 194.6 220.6 214 214 C 233.4 207.4 236.9 313.1 262 298 C 287.1 282.9 297.8 143.4 320 150 C 342.2 156.6 339.4 285.3 356 326 C 372.6 366.7 382.0 322.9 390 322" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="200" cy="156.8" r="24" fill="currentColor"></circle></g></svg>`;
 
   document.documentElement.appendChild(root);
   document.documentElement.appendChild(toggleBtn);
@@ -458,11 +530,19 @@
   // --- header actions ---
   root.querySelector('[data-act="hide"]').addEventListener("click", (e) => {
     e.stopPropagation();
-    setSiteMode("hidden");
+    hideChat();
   });
   els.modeBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    setSiteMode(effectiveMode() === "docked" ? "overlay" : "docked");
+    // Flip the CURRENT layout's saved overlay/docked setting (persists to the popup). Coordinate the
+    // site's native chat the same way show/hide does: docked → open it (our Twitch tab); overlay →
+    // collapse it, so docking/undocking doesn't leave the page's chat in a contradictory state.
+    clearAutoReveal();
+    const layout = currentLayout();
+    const next = layoutMode(layout) === "docked" ? "overlay" : "docked";
+    if (next === "docked") { setNativeChat(true); dockChatTab = "twitch"; }
+    else setNativeChat(false);
+    setLayoutMode(layout, next);
   });
   root.querySelector('[data-act="reconnect"]').addEventListener("click", (e) => {
     e.stopPropagation();
@@ -487,9 +567,45 @@
     await setDelay(Math.min(600, (prefs.chatDelaySec || 0) + 1));
   });
 
+  // The bubble is draggable anywhere on screen (position persisted in prefs.bubblePos). A press that
+  // moves past a small threshold is a drag (we persist + suppress the click); a plain click shows chat.
+  let bubbleDragged = false;
   toggleBtn.addEventListener("click", () => {
-    // Un-hide: return to the site's chosen visible mode (auto/overlay/docked) — the dropdown's value.
-    setSiteMode(siteMode());
+    if (bubbleDragged) { bubbleDragged = false; return; } // this "click" was the end of a drag
+    // Un-hide: return to the current layout's overlay/docked mode. In docked mode this also opens
+    // the site's native chat to dock into + shows our Twitch tab.
+    showChat();
+  });
+  toggleBtn.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    const r = toggleBtn.getBoundingClientRect();
+    const startLeft = r.left, startTop = r.top;
+    let moved = false;
+    const onMove = (ev) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return; // below threshold → still a click
+      moved = true;
+      const bw = toggleBtn.offsetWidth, bh = toggleBtn.offsetHeight;
+      const left = Math.max(0, Math.min(window.innerWidth - bw, startLeft + dx));
+      const top = Math.max(0, Math.min(window.innerHeight - bh, startTop + dy));
+      toggleBtn.style.left = left + "px";
+      toggleBtn.style.top = top + "px";
+      toggleBtn.style.right = "auto";
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      if (moved) {
+        bubbleDragged = true; // swallow the click that fires after a drag…
+        setTimeout(() => { bubbleDragged = false; }, 300); // …but never stay stuck if no click follows
+        prefs.bubblePos = { left: parseFloat(toggleBtn.style.left), top: parseFloat(toggleBtn.style.top) };
+        savePrefs();
+      }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
   });
 
   // --- channel input (twitch.tv/<channel> with × reset; auto-fills from mapping) ---
@@ -572,6 +688,11 @@
       if (e.key === "ArrowDown") { e.preventDefault(); moveSuggest(1);    return; }
       if (e.key === "ArrowUp")   { e.preventDefault(); moveSuggest(-1);   return; }
       // (Escape handled by the window-capture listener below.)
+    } else {
+      // Suggest list closed → arrows recall sent-message history (terminal-style). The input is
+      // single-line, so Up/Down don't otherwise move the caret.
+      if (e.key === "ArrowUp")   { e.preventDefault(); historyPrev(); return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); historyNext(); return; }
     }
     if (e.key === "Enter") { e.preventDefault(); closeSuggest(); sendCurrent(); }
     e.stopPropagation();
@@ -627,6 +748,35 @@
     return s;
   }
   function clearInput() { els.input.textContent = ""; }
+  function setInputText(str) { els.input.textContent = str || ""; focusInputEnd(); }
+
+  // --- sent-message history (terminal-style Up/Down recall) ---
+  // sentHistory[] holds past sent messages (oldest→newest). `histPos` walks it; histPos ===
+  // sentHistory.length means "the live draft" (slot past the end), and `histDraft` preserves the
+  // half-typed text you arrowed up off so Down returns you to it — just like a shell.
+  const sentHistory = [];
+  let histPos = 0;
+  let histDraft = "";
+  const HISTORY_CAP = 100;
+  function pushHistory(text) {
+    if (text && sentHistory[sentHistory.length - 1] !== text) {   // skip consecutive dupes
+      sentHistory.push(text);
+      if (sentHistory.length > HISTORY_CAP) sentHistory.shift();
+    }
+    histPos = sentHistory.length;
+    histDraft = "";
+  }
+  function historyPrev() {            // Up → older message
+    if (!sentHistory.length) return;
+    if (histPos === sentHistory.length) histDraft = inputText(); // leaving the live draft — save it
+    if (histPos > 0) histPos--;
+    setInputText(sentHistory[histPos]);
+  }
+  function historyNext() {            // Down → newer message (past the end = back to the live draft)
+    if (histPos >= sentHistory.length) return;
+    histPos++;
+    setInputText(histPos === sentHistory.length ? histDraft : sentHistory[histPos]);
+  }
   function focusInputEnd() {
     els.input.focus();
     const sel = window.getSelection();
@@ -809,6 +959,7 @@
       return;
     }
     if (!irc.say(text)) { setStatus("send failed (not connected)"); return; }
+    pushHistory(text);
     clearInput();
   }
 
@@ -817,6 +968,7 @@
   const renderBuffer = [];
   let pumpTimer = null;
   let renderTimer = null;
+  let renderRaf = 0;
 
   function enqueue(m) {
     if (m.type === "roomstate") {
@@ -835,6 +987,7 @@
       if (!lastJoined || m.channel?.toLowerCase() === lastJoined) addChatter(m.user);
       return;
     }
+    if (m.type === "msg" && !m.self) noteMsgForRate(m.ts);   // surge detection for auto show/hide
     if (m.type === "msg" && m.user) { addChatter(m.user, m.displayName); feedHighlights(m); }
     if (m.type === "msg" && !m.self && isBlocked(m.text)) return;
     if (m.self || (prefs.chatDelaySec || 0) <= 0) { scheduleRender(m); return; }
@@ -919,16 +1072,48 @@
     else applyDelayDisplay();
   });
 
+  // Render is ALWAYS coalesced: messages are buffered and the whole batch is committed in one DOM
+  // pass per frame (or per updateFrequencyMs window). The old freq=0 path rendered each message
+  // synchronously, which on a fast channel meant one forced reflow + style/layout recalc PER MESSAGE
+  // (`renderMessage` → `pinToBottom` reads scrollHeight) — at 100–350 msg/s that pinned the main
+  // thread and starved YouTube's video pipeline (buffering / frame-skip / cursor lag). Batching turns
+  // N per-message reflows into one per frame (≤60/s) via a DocumentFragment + a single pin + prune.
   function scheduleRender(m) {
-    const freq = prefs.updateFrequencyMs | 0;
-    if (freq <= 0) { renderMessage(m); return; }
     renderBuffer.push(m);
-    if (renderTimer) return;
-    renderTimer = setTimeout(() => {
-      renderTimer = null;
-      const batch = renderBuffer.splice(0);
-      for (const x of batch) renderMessage(x);
-    }, freq);
+    // Backpressure: never buffer more than ~2× the visible cap. Beyond that the extra messages would
+    // be pruned out the instant they render (faster than anyone can read), so drop the oldest instead
+    // of paying to build + immediately discard their DOM. Bounds work-per-frame and memory under a
+    // pathological flood (e.g. a 150k-viewer hype moment, or a backgrounded tab resuming).
+    const cap = Math.max(50, (prefs.maxMessages || 300) * 2);
+    if (renderBuffer.length > cap) {
+      const drop = renderBuffer.length - cap;
+      renderBuffer.splice(0, drop);
+      if (PERF.on) PERF.dropped += drop;
+    }
+    const freq = prefs.updateFrequencyMs | 0;
+    if (freq > 0) { if (!renderTimer) renderTimer = setTimeout(flushRenderBuffer, freq); }
+    else if (!renderRaf) renderRaf = requestAnimationFrame(flushRenderBuffer);
+  }
+
+  function flushRenderBuffer() {
+    renderTimer = null; renderRaf = 0;
+    if (!renderBuffer.length) return;
+    const _t = pnow();
+    const batch = renderBuffer.splice(0);
+    let frag = document.createDocumentFragment();
+    let pending = 0;
+    const commit = () => { if (pending) { els.messages.appendChild(frag); frag = document.createDocumentFragment(); pending = 0; } };
+    for (const m of batch) {
+      // Control messages mutate the EXISTING DOM (clear / dim / remove), so commit anything buffered
+      // ahead of them first to keep ordering and let a clearmsg find its target.
+      if (m.type === "clearchat" || m.type === "clearmsg") { commit(); applyControlMessage(m); continue; }
+      const el = buildMessageEl(m);
+      if (el) { frag.appendChild(el); pending++; if (PERF.on) PERF.msgs++; }
+    }
+    commit();
+    pruneOldMessages();                          // once per batch, not per message
+    if (shouldAutoscroll()) pinToBottom();       // single forced reflow per frame
+    if (PERF.on) PERF.render += pnow() - _t;
   }
 
   // --- IRC ---
@@ -968,6 +1153,7 @@
         onChange: () => { /* nothing to do — emotes resolved at render time */ }
       });
       applyAuthUI(currentAuth);
+      buildMentionRe();        // (re)build the @-mention matcher for the signed-in identity
       updateChannelControls(); // show/hide the heart based on sign-in state
       if (irc) irc.disconnect();
       irc = new TwitchIRC({
@@ -975,6 +1161,7 @@
         login: currentAuth.login,
         displayName: currentAuth.displayName || currentAuth.login,
         anonymous: currentAuth.kind === "anonymous",
+        url: prefs.debugIrcUrl || undefined,   // debug-only: mock IRC server for perf reproduction
         onMessage: enqueue,
         onStatus: (s) => { connState = s.state; setStatus(formatStatus(s)); updateConnBanner(); }
       });
@@ -984,6 +1171,20 @@
       connecting = false;
     }
   }
+
+  // --- @-mention of the signed-in user ---
+  // Built from the OAuth login + display name; messages matching it get a red-tinted background.
+  // Anonymous users have no identity to be mentioned, so it stays null (no highlighting).
+  let mentionRe = null;
+  function buildMentionRe() {
+    mentionRe = null;
+    if (currentAuth?.kind !== "oauth") return;
+    const names = [...new Set([currentAuth.login, currentAuth.displayName].filter(Boolean))]
+      .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    // `(?<!\w)` so "@name" only matches as a real mention, not inside e.g. an email (a@name.com).
+    if (names.length) mentionRe = new RegExp(`(?<!\\w)@(?:${names.join("|")})\\b`, "i");
+  }
+  function mentionsMe(text) { return !!(mentionRe && text && mentionRe.test(text)); }
 
   function applyAuthUI(auth) {
     const anon = auth.kind === "anonymous";
@@ -1002,8 +1203,11 @@
   function disconnectIRC() {
     if (irc) { irc.disconnect(); irc = null; lastJoined = ""; }
     chrome.storage.local.set({ [PREFS_KEY]: { ...prefs, _activeChannel: "" } }).catch(() => {});
-    // clear pending delay queue so it doesn't dump after reconnect
+    // clear pending delay queue + render buffer so nothing dumps after reconnect
     queue.length = 0;
+    renderBuffer.length = 0;
+    if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+    if (renderRaf) { cancelAnimationFrame(renderRaf); renderRaf = 0; }
     if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
     delayPrimed = false;          // re-arm the buffering indicator for the next connection
     updateDelayBanner();
@@ -1109,6 +1313,14 @@
         || next.highlightPersistDensity !== prefs.highlightPersistDensity;
       const colorChanged = next.highlightColor !== prefs.highlightColor;
       const viewersChanged = next.showViewers !== prefs.showViewers;
+      // Native-chat-hide changes can come from the legacy global flag or the per-site/per-layout map.
+      const hideChatChanged = next.hideYoutubeChat !== prefs.hideYoutubeChat
+        || JSON.stringify(next.sites?.[HOST]?.hideNative) !== JSON.stringify(prefs.sites?.[HOST]?.hideNative);
+      // The per-layout mode map can change from the popup without effectiveMode differing right now
+      // (e.g. editing the theater mode while windowed) — re-dispatch so it's live next transition.
+      const layoutModesChanged = JSON.stringify(next.sites?.[HOST]?.layoutModes) !== JSON.stringify(prefs.sites?.[HOST]?.layoutModes)
+        || next.sites?.[HOST]?.mode !== prefs.sites?.[HOST]?.mode;
+      const disconnectOnHideChanged = next.disconnectOnHide !== prefs.disconnectOnHide;
       const windowChanged = next.highlightWindowSec !== prefs.highlightWindowSec
         || JSON.stringify(next.highlightWindows) !== JSON.stringify(prefs.highlightWindows);
       prefs = next;
@@ -1121,7 +1333,9 @@
       if (boundChanged && effectiveMode() === "overlay") applyBoundMode();
       if (blocklistChanged) rebuildBlockSet();
       if (loadOnChanged) syncPageActive(); // live-only ⇄ all may mount/unmount this page
-      if (modeChanged) applyMode();
+      if (hideChatChanged) { hideChatKey = null; lastLayoutApplied = null; applyHideNativeChat(); applyMode(); } // re-arm + apply now
+      if (disconnectOnHideChanged) applyMode(); // connect/disconnect to match the new policy if hidden
+      if (modeChanged || layoutModesChanged) applyMode();
       if (highlightChanged) refreshHighlightState();
       if (colorChanged) applyWaveColor();
     }
@@ -1136,7 +1350,10 @@
     // Safety net: if we're meant to be connected but aren't (e.g. AUTH_GET failed against a cold
     // service worker on reload), keep retrying on the 2 s poll instead of waiting for a manual
     // reconnect. The `connecting` guard inside ensureConnected makes overlapping calls a no-op.
-    if (!irc && effectiveMode() !== "hidden") ensureConnected();
+    if (!irc && shouldConnect()) ensureConnected();
+    applyHideNativeChat();
+    ensureNativeChatObserver();
+    ensureLayoutObserver();
     const h = SITE.detectHandle();
     if (h !== detectedHandle) {
       detectedHandle = h;
@@ -1146,8 +1363,10 @@
       syncChannel();
     }
     else updateChannelInputFromPrefs();
-    // Effective mode can flip on its own in "auto" (the chat frame loading/unloading), so re-run
-    // the full dispatcher when it differs from what we last applied.
+    // A layout transition (default ⇄ theater) can change the mode and/or trigger the per-layout
+    // hide-native default even when effectiveMode is unchanged — re-dispatch on any layout change.
+    if (currentLayout() !== lastLayoutApplied) { applyMode(); return; }
+    // Effective mode can also flip on its own, so re-run the dispatcher when it differs.
     const em = effectiveMode();
     if (em !== appliedMode) { applyMode(); return; }
     // Retry player binding if not yet established (player may load after content script).
@@ -1187,8 +1406,9 @@
         // The seekbar resizes with fullscreen → FP changes → regroup the emote markers promptly
         // (the 2 s loop would catch the width change too, just up to 2 s later).
         markEmotesDirty(); scheduleEmoteRender();
-        // In "auto" the effective mode flips (overlay⇄docked) with fullscreen — re-apply fully.
-        if (siteMode() === "auto") { applyMode(); return; }
+        // Fullscreen is its own layout, so effectiveMode() flips on every fullscreen transition —
+        // re-dispatch to apply that layout's saved overlay/docked (and its hide-native default).
+        applyMode();
         if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
       });
     })
@@ -1196,16 +1416,73 @@
   // Window resize also changes the seekbar width → regroup the emote markers (debounced via rAF).
   window.addEventListener("resize", () => { markEmotesDirty(); scheduleEmoteRender(); }, { passive: true });
 
+  // --- auto show/hide on chat surges ---
+  // When enabled, a sudden spike in chat msgs/sec (relative to the recent baseline) auto-reveals the
+  // chat WHILE it's hidden, then re-hides it after `autoShowVisibleSec`. It only acts on a hidden
+  // overlay (never hides one the user has up) and any manual interaction cancels the pending re-hide
+  // ("return to prior state"). Site-agnostic + independent of the YouTube-live density wave.
+  let rateStamps = [];       // arrival ts of recent 'msg's, trimmed to the window each tick
+  let baselineRate = 0;      // EMA of per-second msg rate (auto-calibrating)
+  let autoRevealed = false;  // chat was auto-revealed by a surge (vs shown by the user)
+  let autoHideTimer = null;
+  function autoShowWindowMs() { return Math.max(1, Math.min(60, prefs.autoShowWindowSec | 0 || 5)) * 1000; }
+  function noteMsgForRate(ts) { if (prefs.autoShowHide) rateStamps.push(ts || Date.now()); }
+  function cancelAutoHide() { if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; } }
+  // Called by every explicit user action (show/hide/focus/dock) + by in-overlay activity, so the
+  // surge-reveal hands control back to the user instead of yanking the chat away under them.
+  function clearAutoReveal() { autoRevealed = false; cancelAutoHide(); }
+  setInterval(() => {
+    if (!prefs.autoShowHide) { if (rateStamps.length) rateStamps.length = 0; return; }
+    const now = Date.now();
+    const win = autoShowWindowMs();
+    while (rateStamps.length && rateStamps[0] < now - win) rateStamps.shift();
+    const rate = rateStamps.length / (win / 1000);            // msgs/sec over the window
+    const MIN_RATE = 4;                                       // absolute floor so a quiet→2-msg blip can't fire
+    const surge = rate >= Math.max(baselineRate * 3, MIN_RATE);
+    baselineRate = baselineRate ? baselineRate * 0.8 + rate * 0.2 : rate; // slow EMA (after the test)
+    if (surge && pageActive && effectiveMode() === "hidden" && !autoRevealed) {
+      autoRevealed = true;
+      revealChat();
+      const visMs = Math.max(1, Math.min(120, prefs.autoShowVisibleSec | 0 || 8)) * 1000;
+      cancelAutoHide();
+      autoHideTimer = setTimeout(() => {
+        autoHideTimer = null;
+        if (autoRevealed && effectiveMode() !== "hidden") { autoRevealed = false; hideChat(); }
+        else autoRevealed = false;
+      }, visMs);
+    }
+  }, 1000);
+
   // --- hotkeys ---
   // 1. Toggle visibility — same as the × button / chat bubble (hide ⇄ return to the chosen mode).
   // 2. Focus input — reveal chat (if hidden) and put the caret in the message box.
+  // Will un-hiding land us in docked mode? = the current layout's saved mode.
+  function willDockOnShow() { return layoutMode() === "docked"; }
+  // Reveal half (no auto-reveal bookkeeping) — shared by the user show + the surge auto-reveal. If
+  // we land docked, also open the site's native chat (so there's a frame to dock into — it may be
+  // collapsed, esp. in fullscreen) and surface OUR Twitch tab.
+  function revealChat() {
+    if (willDockOnShow()) { setNativeChat(true); dockChatTab = "twitch"; applyDockTab(); }
+    return setHidden(false);
+  }
+  // Show chat (hotkey / bubble) — an explicit user action, so it also cancels any pending auto-hide.
+  function showChat() { clearAutoReveal(); return revealChat(); }
+  // Hide chat (× / bubble / hotkey). When docked alongside the site's chat, hiding ours also hides
+  // theirs (so the video is left clean) — matching the show side that opened it.
+  function hideChat() {
+    clearAutoReveal();
+    const wasDocked = effectiveMode() === "docked";
+    setHidden(true);
+    if (wasDocked) setNativeChat(false);
+  }
   function toggleVisibility() {
-    if (effectiveMode() === "hidden") setSiteMode(siteMode());
-    else setSiteMode("hidden");
+    if (effectiveMode() === "hidden") showChat();
+    else hideChat();
   }
   function focusChatInput() {
+    clearAutoReveal();
     const reveal = () => { root.classList.remove("meridian-idle"); bumpActivity(); focusInputEnd(); };
-    if (effectiveMode() === "hidden") setSiteMode(siteMode()).then(reveal);
+    if (effectiveMode() === "hidden") revealChat().then(reveal);
     else reveal();
   }
   // Blur the input and (in overlay mode) collapse the bars — same end state as Esc / the idle timer.
@@ -1281,6 +1558,7 @@
   function bumpActivity() {
     root.classList.remove("meridian-idle");
     startIdleTimer();
+    if (autoRevealed) clearAutoReveal(); // user engaged the auto-revealed chat → stop the auto re-hide
   }
   // Activity = mouse/keys/wheel inside the overlay OR keeping focus on an input.
   root.addEventListener("mouseenter", bumpActivity);
@@ -1363,7 +1641,9 @@
   let pinRaf = 0;
   function pinToBottom() {
     const m = els.messages;
-    m.scrollTop = m.scrollHeight;
+    const _t = pnow();
+    m.scrollTop = m.scrollHeight;          // forced synchronous reflow (read scrollHeight)
+    if (PERF.on) { PERF.pins++; PERF.pinMs += pnow() - _t; }
     if (pinRaf) return;
     pinRaf = requestAnimationFrame(() => { pinRaf = 0; els.messages.scrollTop = els.messages.scrollHeight; });
   }
@@ -1529,6 +1809,12 @@
   }
 
   function feedHighlights(m) {
+    const _t = pnow();
+    try {
+    return _feedHighlights(m);
+    } finally { if (PERF.on) PERF.feed += pnow() - _t; }
+  }
+  function _feedHighlights(m) {
     // Hot path (runs per message) — no DOM here (`densityArmed`/`liveEdgeVt` refreshed by the 2 s
     // loop). Density is keyed by the seekbar's STREAM-TIME (the same coordinate the emote markers
     // use) so the wave and the emotes scroll/scale in exact lockstep and never drift apart. We
@@ -1543,7 +1829,7 @@
     for (const e of m.emotes || []) {
       if (e.name && !seen.has(e.name)) {
         seen.add(e.name);
-        hlEngine.ingest(e.name, `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/1.0`, user, m.ts);
+        hlEngine.ingest(e.name, `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/2.0`, user, m.ts);
       }
     }
     const map = emoteReg?.currentMap();
@@ -1894,6 +2180,7 @@
   // every regroup). The clustering math is identical to before — only its scheduling + the DOM reuse
   // changed.
   function regroupEmotes(box, s, barW) {
+    if (PERF.on) PERF.regroup++;
     const recs = [];
     for (const rec of highlights.values()) {
       const frac = highlightFrac(rec, s);
@@ -2149,8 +2436,8 @@
     if (!layer) { markWaveOnPlayer(false); return; }
     layer.style.display = "";
     markWaveOnPlayer(true);
-    renderWave();
-    renderEmotes();
+    const _tw = pnow(); renderWave(); if (PERF.on) PERF.wave += pnow() - _tw;
+    const _te = pnow(); renderEmotes(); if (PERF.on) PERF.emotes += pnow() - _te;
   }, 2000);
   setInterval(() => hlEngine.prune(Date.now()), 15000);
   loadHighlights();
@@ -2203,43 +2490,48 @@
     const to = (x) => Math.round(hue(p, q, x) * 255);
     return `rgb(${to(h + 1 / 3)}, ${to(h)}, ${to(h - 1 / 3)})`;
   }
-  function renderMessage(m) {
-    const el = document.createElement("div");
-    el.className = "meridian-msg" + (m.type === "notice" ? " notice" : "") + (m.self ? " self" : "") + (m.action ? " action" : "");
-    if (m.id) el.dataset.id = m.id;
-
-    if (m.type === "notice") {
-      el.textContent = m.text;
-    } else if (m.type === "clearchat") {
-      if (!m.user) { els.messages.innerHTML = ""; return; }
+  // Control messages (clearchat / clearmsg) mutate the existing message DOM rather than appending.
+  function applyControlMessage(m) {
+    if (m.type === "clearchat") {
+      if (!m.user) { els.messages.replaceChildren(); return; }
+      const lc = m.user.toLowerCase();
       els.messages.querySelectorAll(".meridian-msg").forEach((n) => {
-        if (n.dataset.user !== m.user.toLowerCase()) return;
+        if (n.dataset.user !== lc) return;
         if (prefs.hideDeleted) n.remove();
         else n.style.opacity = "0.35";
       });
-      return;
     } else if (m.type === "clearmsg") {
       const n = els.messages.querySelector(`.meridian-msg[data-id="${cssEscape(m.targetMsgId)}"]`);
       if (n) { if (prefs.hideDeleted) n.remove(); else n.style.opacity = "0.35"; }
-      return;
-    } else if (m.type === "msg") {
-      el.dataset.user = (m.user || "").toLowerCase();
-      const name = document.createElement("span");
-      name.className = "meridian-name";
-      name.textContent = m.displayName || m.user;
-      if (m.color && !m.self) name.style.color = readableColor(m.color);
-      const sep = document.createElement("span");
-      sep.className = "meridian-sep";
-      sep.textContent = ":";
-      const text = document.createElement("span");
-      text.className = "meridian-text";
-      renderMessageText(text, m);
-      el.append(name, sep, text);
-    } else return;
+    }
+  }
 
-    els.messages.appendChild(el);
-    pruneOldMessages();
-    if (shouldAutoscroll()) pinToBottom();
+  // Build the DOM for one msg/notice WITHOUT touching the live tree (so the caller can batch a whole
+  // frame's worth into a DocumentFragment and commit once). Returns null for types with no element.
+  function buildMessageEl(m) {
+    if (m.type !== "msg" && m.type !== "notice") return null;
+    const el = document.createElement("div");
+    el.className = "meridian-msg" + (m.type === "notice" ? " notice" : "") + (m.self ? " self" : "") + (m.action ? " action" : "");
+    if (m.id) el.dataset.id = m.id;
+    if (m.type === "notice") {
+      el.textContent = m.text;
+      return el;
+    }
+    el.dataset.user = (m.user || "").toLowerCase();
+    if (!m.self && mentionsMe(m.text)) el.classList.add("meridian-mention");
+    if (m.highlighted && prefs.markHighlightedMsgs !== false) el.classList.add("meridian-highlighted");
+    const name = document.createElement("span");
+    name.className = "meridian-name";
+    name.textContent = m.displayName || m.user;
+    if (m.color && !m.self) name.style.color = readableColor(m.color);
+    const sep = document.createElement("span");
+    sep.className = "meridian-sep";
+    sep.textContent = ":";
+    const text = document.createElement("span");
+    text.className = "meridian-text";
+    renderMessageText(text, m);
+    el.append(name, sep, text);
+    return el;
   }
 
   function shouldAutoscroll() {
@@ -2354,51 +2646,157 @@
     // can bring chat back. The chat is the only way back, so it's never itself hidden.
     const show = pageActive && root.classList.contains("meridian-hidden");
     toggleBtn.classList.toggle("show", show);
+    // Apply the saved drag position (clamped to the current viewport), overriding the CSS top/right.
+    if (show && prefs.bubblePos && Number.isFinite(prefs.bubblePos.left) && Number.isFinite(prefs.bubblePos.top)) {
+      const bw = toggleBtn.offsetWidth || 32, bh = toggleBtn.offsetHeight || 32;
+      toggleBtn.style.left = Math.max(0, Math.min(window.innerWidth - bw, prefs.bubblePos.left)) + "px";
+      toggleBtn.style.top = Math.max(0, Math.min(window.innerHeight - bh, prefs.bubblePos.top)) + "px";
+      toggleBtn.style.right = "auto";
+    }
   }
 
   // --- display mode (overlay / docked / hidden), per site ---
-  // (lastVisibleMode / dockRetryTimer declared earlier to avoid a TDZ at setup.)
+  // (dockRetryTimer declared earlier to avoid a TDZ at setup.)
   function isFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
-  // The user's chosen *visible* mode for this site (auto/overlay/docked) — never "hidden".
-  // Hiding is a transient flag (toggled by the bubble / × / hotkey), kept separate so the popup
-  // dropdown always reflects the state the extension returns to when un-hidden.
-  function siteMode() {
-    const m = prefs.sites?.[HOST]?.mode;
-    return (m === "overlay" || m === "docked" || m === "auto") ? m : "auto";
+  // --- per-layout display mode ---
+  // Each site has its own overlay/docked choice for each YouTube *layout* — Default (windowed),
+  // Theater, and Fullscreen — instead of one site-wide mode + a transient fullscreen sub-mode. The
+  // dock button (in any layout) writes the current layout's setting. Kick has no theater layout.
+  function currentLayout() {
+    if (isFullscreen()) return "fullscreen";
+    if (SITE.name === "youtube" && document.querySelector("ytd-watch-flexy[theater]")) return "theater";
+    return "default";
+  }
+  // (LAYOUT_MODE_DEFAULTS declared near the top — read at setup.)
+  // Resolve the per-layout map, migrating a legacy site-wide `.mode` ("auto"/"overlay"/"docked").
+  function layoutModes() {
+    const e = prefs.sites?.[HOST];
+    if (e?.layoutModes) return e.layoutModes;
+    if (e?.mode === "overlay") return { default: "overlay", theater: "overlay", fullscreen: "overlay" };
+    if (e?.mode === "docked") return { default: "docked", theater: "docked", fullscreen: "docked" };
+    return LAYOUT_MODE_DEFAULTS; // legacy "auto"/unset
+  }
+  function layoutMode(layout = currentLayout()) {
+    const m = layoutModes()[layout];
+    return (m === "overlay" || m === "docked") ? m : (LAYOUT_MODE_DEFAULTS[layout] || "overlay");
   }
   function siteHidden() { return prefs.sites?.[HOST]?.hidden === true; }
-  // Concrete display mode after resolving the hidden flag + "auto".
+  // Per-layout "hide the site's native chat by default" (falls back to the legacy global flag for
+  // the windowed/default layout so existing users keep their setting until they edit the new ones).
+  function hideNativeForLayout(layout = currentLayout()) {
+    const hn = prefs.sites?.[HOST]?.hideNative;
+    if (hn && typeof hn[layout] === "boolean") return hn[layout];
+    return prefs.hideYoutubeChat === true && layout === "default";
+  }
+  // Toggle YouTube's native chat from our own code WITHOUT the external-open observer mistaking it
+  // for the user clicking YouTube's button (which would flip our dock tab to the YouTube source).
+  let selfTogglingNative = false;
+  function setNativeChat(open) {
+    if (!SITE.setNativeChatOpen) return;
+    selfTogglingNative = true;
+    SITE.setNativeChatOpen(open);
+    setTimeout(() => { selfTogglingNative = false; }, 600);
+  }
+  // Watch YouTube's chat frame: if the user opens native chat via YouTube's OWN controls (not our
+  // setNativeChat → guarded by selfTogglingNative), surface the YouTube source tab in our docked
+  // panel. Showing it via our hotkey/bubble keeps the Twitch tab (set in showChat). Re-attaches when
+  // the SPA swaps the frame.
+  let natChatObs = null, natChatObsTarget = null;
+  function ensureNativeChatObserver() {
+    const f = SITE.findDockAnchor?.();
+    if (!f || f === natChatObsTarget) return;
+    if (natChatObs) natChatObs.disconnect();
+    natChatObsTarget = f;
+    natChatObs = new MutationObserver(() => {
+      if (selfTogglingNative) return;                 // our own toggle → ignore
+      if (!SITE.isNativeChatOpen?.()) return;          // only react to the user OPENING it
+      if (effectiveMode() === "docked" && dockChatTab !== "native") { dockChatTab = "native"; applyDockTab(); }
+    });
+    natChatObs.observe(f, { attributes: true, attributeFilter: ["collapsed"] });
+  }
+  // Watch YouTube's theater toggle so a layout change (default ⇄ theater) re-dispatches applyMode
+  // instantly — applying that layout's overlay/docked + hide-native default — instead of waiting up
+  // to 2 s for the poll. (Fullscreen is handled by the fullscreenchange listener.)
+  let layoutObs = null, layoutObsTarget = null;
+  function ensureLayoutObserver() {
+    if (SITE.name !== "youtube") return;
+    const wf = document.querySelector("ytd-watch-flexy");
+    if (!wf || wf === layoutObsTarget) return;
+    if (layoutObs) layoutObs.disconnect();
+    layoutObsTarget = wf;
+    layoutObs = new MutationObserver(() => { if (currentLayout() !== lastLayoutApplied) applyMode(); });
+    layoutObs.observe(wf, { attributes: true, attributeFilter: ["theater"] });
+  }
+
+  // Concrete display mode after resolving the hidden flag + the current layout's overlay/docked.
   function effectiveMode() {
     if (siteHidden()) return "hidden";
-    const m = siteMode();
-    if (m !== "auto") return m;
-    // Auto: floating overlay in fullscreen; docked otherwise — but only when the page actually
-    // exposes a chat frame to dock into (VODs without live chat have none), else fall back to
-    // overlay so chat is never left invisible.
-    if (isFullscreen()) return "overlay";
-    return SITE.findDockAnchor?.() ? "docked" : "overlay";
+    return layoutMode();
   }
-  async function setSiteMode(mode) {
+  // "Hide the site's native chat by default" (per layout). Collapse the native chat for a short
+  // window each video once its frame exists — not continuously, so a later manual re-open isn't
+  // fought (YouTube re-enabling itself was a prior bug). Re-armed when the videoId OR layout changes.
+  let hideChatKey = null;
+  let hideChatUntil = 0;
+  function applyHideNativeChat() {
+    if (!hideNativeForLayout() || !SITE.nativeChatExists?.()) return;
+    const key = (SITE.videoId?.() || "") + "|" + currentLayout();
+    // Start a short window the first time this video/layout's chat frame exists. Re-collapse on
+    // every poll while open during the window — YouTube flaps the chat expanded/collapsed as it
+    // initializes, so a one-shot collapse loses the race. After the window we stop.
+    if (key !== hideChatKey) { hideChatKey = key; hideChatUntil = Date.now() + 15000; }
+    if (Date.now() > hideChatUntil) return;
+    if (SITE.isNativeChatOpen?.()) setNativeChat(false); // guarded so it doesn't flip our dock tab
+  }
+  // Set the transient show/hide flag (bubble / × / hotkey). Kept separate from the per-layout mode
+  // so revealing returns to the layout's chosen overlay/docked.
+  async function setHidden(hidden) {
     const sites = { ...(prefs.sites || {}) };
     const entry = { ...(sites[HOST] || {}) };
-    if (mode === "hidden") {
-      entry.hidden = true; // keep the chosen visible mode so the bubble restores to it
-    } else {
-      entry.mode = mode;
-      entry.hidden = false;
-    }
+    entry.hidden = !!hidden;
     sites[HOST] = entry;
     prefs.sites = sites;
-    prefs.hidden = entry.hidden === true; // keep legacy flag coherent
     await savePrefs();
     applyMode();
+  }
+  // Write one layout's overlay/docked choice (the dock button + popup do this). Toggling also clears
+  // the hidden flag (you're choosing a visible mode) and drops any legacy site-wide `.mode`.
+  async function setLayoutMode(layout, mode) {
+    const sites = { ...(prefs.sites || {}) };
+    const entry = { ...(sites[HOST] || {}) };
+    entry.layoutModes = { ...LAYOUT_MODE_DEFAULTS, ...layoutModes(), [layout]: mode };
+    delete entry.mode;
+    entry.hidden = false;
+    sites[HOST] = entry;
+    prefs.sites = sites;
+    await savePrefs();
+    applyMode();
+  }
+  // Apply a layout's "hide native by default" the first time we enter that layout: collapse the
+  // site's chat, and — in a docked layout — hide our overlay too (so "both chats hidden by default").
+  // Guarded by lastLayoutApplied (declared near the top) so we only do it on the transition, never
+  // fighting a manual reveal.
+  function applyLayoutDefaults() {
+    const layout = currentLayout();
+    if (!pageActive) { lastLayoutApplied = null; return; }
+    if (layout === lastLayoutApplied) return;
+    lastLayoutApplied = layout;
+    if (!hideNativeForLayout(layout)) return;
+    setNativeChat(false);
+    if (layoutMode(layout) === "docked" && !siteHidden()) {
+      // Hide our overlay too. Write the flag directly (no applyMode re-dispatch — the caller, which
+      // is applyMode itself, continues with the updated flag).
+      const sites = { ...(prefs.sites || {}) };
+      sites[HOST] = { ...(sites[HOST] || {}), hidden: true };
+      prefs.sites = sites;
+      savePrefs();
+    }
   }
   // Visual half — safe to run during setup (touches only DOM/classes, no irc/queue).
   function applyModeVisual() {
     // On a page with no video (home/search feed), keep everything torn down + invisible.
     if (!pageActive) { undock(); hideOverlay(); updateModeButton(); appliedMode = "inactive"; return; }
     const mode = effectiveMode();
-    if (mode !== "hidden") lastVisibleMode = siteMode();
     appliedMode = mode;
     if (mode === "hidden") { undock(); hideOverlay(); updateModeButton(); return; }
     root.classList.remove("meridian-hidden");
@@ -2407,10 +2805,17 @@
     updateModeButton();
   }
   // Full apply (visual + connection) — used at runtime after everything is initialized.
+  // Should the IRC stay connected? Always when the page has a video and we're not hidden. When
+  // hidden, stay connected (so emotes/highlights/density keep processing — hiding is purely visual)
+  // UNLESS the user opted into `disconnectOnHide` (the old behavior: hiding tears the connection down).
+  function shouldConnect() {
+    return pageActive && !(effectiveMode() === "hidden" && prefs.disconnectOnHide === true);
+  }
   function applyMode() {
+    applyLayoutDefaults(); // may flip the hidden flag on a layout transition (read by applyModeVisual)
     applyModeVisual();
-    if (!pageActive || effectiveMode() === "hidden") disconnectIRC();
-    else if (!irc) ensureConnected();
+    if (shouldConnect()) { if (!irc) ensureConnected(); }
+    else disconnectIRC();
   }
   // Mount/connect only when the page actually has a video; tear down when it doesn't (SPA nav).
   function syncPageActive() {
