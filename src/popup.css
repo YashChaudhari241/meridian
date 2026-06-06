@@ -43,6 +43,7 @@ body {
 /* ---------- tabs ---------- */
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 0 8px;
   border-bottom: 1px solid var(--border-1);

@@ -19,6 +19,8 @@
     <button class="tab" data-tab="general">General</button>
     <button class="tab" data-tab="youtube">Site</button>
     <button class="tab" data-tab="chat">Chat</button>
+    <button class="tab" data-tab="overlays">Overlays</button>
+    <button class="tab" data-tab="timeline">Timeline</button>
     <button class="tab" data-tab="appearance">Appearance</button>
     <button class="tab" data-tab="hotkeys">Hotkeys</button>
     <button class="tab" data-tab="reset">Reset</button>
@@ -113,6 +115,64 @@
         <button id="saveMaxMessages">Save</button>
       </div>
     </div>
+    <div class="card" title="When you hide the chat, also disconnect from Twitch. Off (default): hiding is visual only — emotes, highlights and the timeline keep processing in the background.">
+      <label class="row"><span>Disconnect chat on hide</span><input id="disconnectOnHide" type="checkbox" /></label>
+    </div>
+    <div class="card" title="Visually mark channel-points &quot;Highlight My Message&quot; redemptions with a purple wash">
+      <label class="row"><span>Highlight redeemed messages</span><input id="markHighlightedMsgs" type="checkbox" /></label>
+    </div>
+    <div class="card" title="Remove moderated messages instead of dimming them">
+      <label class="row"><span>Hide deleted messages</span><input id="hideDeleted" type="checkbox" /></label>
+    </div>
+    <div class="card" title="Hide messages containing any of these words">
+      <label>Blocked words (one per line, case-insensitive)</label>
+      <textarea id="blockedWords" rows="6" spellcheck="false" placeholder="word1
+word2"></textarea>
+      <button id="saveBlockedWords">Save</button>
+      <span id="blockedWordsMsg" class="hint"></span>
+    </div>
+  </section>
+
+  <!-- Overlays -->
+  <section class="panel" data-tab="overlays">
+    <div class="card" title="Show the channel's live Twitch viewer count in a pill on the overlay. Requires connecting your Twitch account; updates about once a minute.">
+      <label class="row"><span>Live viewer count (requires Twitch sign-in)</span><input id="showViewers" type="checkbox" /></label>
+    </div>
+    <div class="card" title="While chat is hidden, emotes from incoming messages float out of the show-chat bubble">
+      <label class="row"><span>Floating reactions</span><input id="floatingReactions" type="checkbox" /></label>
+      <label style="margin-top:10px;" title="How far emotes travel from the bubble (pixels)">Reaction path length (px)</label>
+      <div class="row">
+        <input id="floatingReactionPath" type="number" min="40" max="280" step="10" />
+        <button id="saveFloatingReactionPath">Save</button>
+      </div>
+    </div>
+    <div class="card" title="Automatically reveal the chat (while it's hidden) during a burst of activity, then hide it again. Detects a spike in messages/second relative to the recent baseline.">
+      <label class="row"><span>Auto show chat on activity surges</span><input id="autoShowHide" type="checkbox" /></label>
+      <label style="margin-top:10px;" title="Length of the rolling window the surge rate is measured over">Surge window (seconds)</label>
+      <div class="row">
+        <input id="autoShowWindow" type="number" min="1" max="60" step="1" />
+        <button id="saveAutoShowWindow">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Messages/sec must exceed the recent baseline multiplied by this factor to trigger a reveal">Surge threshold multiplier</label>
+      <div class="row">
+        <input id="autoShowSurgeFactor" type="number" min="1.1" max="20" step="0.1" />
+        <button id="saveAutoShowSurgeFactor">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Absolute minimum messages/sec required even when the baseline is near zero">Minimum surge rate (msgs/sec)</label>
+      <div class="row">
+        <input id="autoShowMinRate" type="number" min="1" max="100" step="1" />
+        <button id="saveAutoShowMinRate">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="How long the auto-revealed chat stays visible before hiding again">Stay visible for (seconds)</label>
+      <div class="row">
+        <input id="autoShowVisible" type="number" min="1" max="120" step="1" />
+        <button id="saveAutoShowVisible">Save</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Timeline -->
+  <section class="panel" data-tab="timeline">
     <div class="card">
       <label class="row" title="Show a chat activity wave over the live seekbar on YouTube livestreams">
         <span>Highlight timeline (chat-activity wave)</span>
@@ -165,62 +225,6 @@
         <button id="saveHighlightOffset">Save</button>
       </div>
     </details>
-    <div class="card" title="Show the channel's live Twitch viewer count in a pill on the overlay. Requires connecting your Twitch account; updates about once a minute.">
-      <label class="row"><span>Live viewer count (requires Twitch sign-in)</span><input id="showViewers" type="checkbox" /></label>
-      <label class="row" title="Add live viewer counts from co-stream partner channels (listed below). Twitch does not expose co-stream partners automatically — enter their logins manually.">
-        <span>Include co-stream viewer counts</span><input id="includeCostreamViewers" type="checkbox" />
-      </label>
-      <label style="margin-top:10px;" title="Twitch logins whose live viewer counts are summed with the mapped channel (one per line)">Co-stream channels</label>
-      <textarea id="costreamChannels" rows="3" spellcheck="false" placeholder="caster1&#10;caster2"></textarea>
-      <button id="saveCostreamChannels">Save</button>
-    </div>
-    <div class="card" title="While chat is hidden, emotes from incoming messages float out of the show-chat bubble">
-      <label class="row"><span>Floating reactions</span><input id="floatingReactions" type="checkbox" /></label>
-      <label style="margin-top:10px;" title="How far emotes travel from the bubble (pixels)">Reaction path length (px)</label>
-      <div class="row">
-        <input id="floatingReactionPath" type="number" min="40" max="280" step="10" />
-        <button id="saveFloatingReactionPath">Save</button>
-      </div>
-    </div>
-    <div class="card" title="When you hide the chat, also disconnect from Twitch. Off (default): hiding is visual only — emotes, highlights and the timeline keep processing in the background.">
-      <label class="row"><span>Disconnect chat on hide</span><input id="disconnectOnHide" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Automatically reveal the chat (while it's hidden) during a burst of activity, then hide it again. Detects a spike in messages/second relative to the recent baseline.">
-      <label class="row"><span>Auto show chat on activity surges</span><input id="autoShowHide" type="checkbox" /></label>
-      <label style="margin-top:10px;" title="Length of the rolling window the surge rate is measured over">Surge window (seconds)</label>
-      <div class="row">
-        <input id="autoShowWindow" type="number" min="1" max="60" step="1" />
-        <button id="saveAutoShowWindow">Save</button>
-      </div>
-      <label style="margin-top:10px;" title="Messages/sec must exceed the recent baseline multiplied by this factor to trigger a reveal">Surge threshold multiplier</label>
-      <div class="row">
-        <input id="autoShowSurgeFactor" type="number" min="1.1" max="20" step="0.1" />
-        <button id="saveAutoShowSurgeFactor">Save</button>
-      </div>
-      <label style="margin-top:10px;" title="Absolute minimum messages/sec required even when the baseline is near zero">Minimum surge rate (msgs/sec)</label>
-      <div class="row">
-        <input id="autoShowMinRate" type="number" min="1" max="100" step="1" />
-        <button id="saveAutoShowMinRate">Save</button>
-      </div>
-      <label style="margin-top:10px;" title="How long the auto-revealed chat stays visible before hiding again">Stay visible for (seconds)</label>
-      <div class="row">
-        <input id="autoShowVisible" type="number" min="1" max="120" step="1" />
-        <button id="saveAutoShowVisible">Save</button>
-      </div>
-    </div>
-    <div class="card" title="Visually mark channel-points &quot;Highlight My Message&quot; redemptions with a purple wash">
-      <label class="row"><span>Highlight redeemed messages</span><input id="markHighlightedMsgs" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Remove moderated messages instead of dimming them">
-      <label class="row"><span>Hide deleted messages</span><input id="hideDeleted" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Hide messages containing any of these words">
-      <label>Blocked words (one per line, case-insensitive)</label>
-      <textarea id="blockedWords" rows="6" spellcheck="false" placeholder="word1
-word2"></textarea>
-      <button id="saveBlockedWords">Save</button>
-      <span id="blockedWordsMsg" class="hint"></span>
-    </div>
   </section>
 
   <!-- Appearance -->

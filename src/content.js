@@ -135,8 +135,6 @@
     autoShowMinRate: 4,          // absolute floor (msgs/sec) so a quiet→2-msg blip can't fire
     floatingReactions: true,     // float emotes out of the show-chat bubble while chat is hidden
     floatingReactionPath: 100,   // px travel distance for floating reaction emotes
-    includeCostreamViewers: false, // add configured co-stream channels' viewer counts to the pill
-    costreamChannels: [],        // Twitch logins whose live viewer counts are summed with the main channel
     bubblePos: null              // { left, top } of the draggable show-chat bubble (viewport coords)
   };
 
@@ -1313,28 +1311,19 @@
     if (n < 1e6) return (n / 1e3).toFixed(1) + "K";
     return (n / 1e6).toFixed(1) + "M";
   }
-  function setViewers(n, extra) {
+  function setViewers(n) {
     if (n == null) { els.viewers.classList.remove("show"); return; }
     els.viewersCount.textContent = formatViewers(n);
-    els.viewers.title = extra ? `Live viewers on Twitch (${extra})` : "Live viewers on Twitch";
+    els.viewers.title = "Live viewers on Twitch";
     els.viewers.classList.add("show");
   }
   async function fetchViewers() {
     if (!viewersEnabled() || !lastJoined) { setViewers(null); return; }
     if (!chrome.runtime?.id) { stopViewerPoll(); return; } // content script orphaned by an extension reload
     try {
-      const costream = (prefs.includeCostreamViewers && prefs.costreamChannels?.length)
-        ? prefs.costreamChannels.map((c) => String(c).toLowerCase()).filter(Boolean) : [];
-      const r = await chrome.runtime.sendMessage({
-        type: "STREAM_INFO", login: lastJoined, costreamLogins: costream
-      });
+      const r = await chrome.runtime.sendMessage({ type: "STREAM_INFO", login: lastJoined });
       if (!viewersEnabled()) return;                  // toggled off mid-flight
-      if (!r?.ok || !r.live) { setViewers(null); return; }
-      const main = r.viewers ?? 0;
-      const extra = r.costreamViewers ?? 0;
-      const total = r.totalViewers ?? main;
-      if (extra > 0) setViewers(total, `${formatViewers(main)} + ${formatViewers(extra)} co-stream`);
-      else setViewers(main);
+      setViewers(r?.ok && r.live ? r.viewers : null); // hide when offline / failed
     } catch { setViewers(null); }
   }
   function stopViewerPoll() { if (viewerTimer) { clearInterval(viewerTimer); viewerTimer = null; } }
@@ -1412,9 +1401,7 @@
         || next.highlightPersistEmotes !== prefs.highlightPersistEmotes
         || next.highlightPersistDensity !== prefs.highlightPersistDensity;
       const colorChanged = next.highlightColor !== prefs.highlightColor;
-      const viewersChanged = next.showViewers !== prefs.showViewers
-        || next.includeCostreamViewers !== prefs.includeCostreamViewers
-        || JSON.stringify(next.costreamChannels) !== JSON.stringify(prefs.costreamChannels);
+      const viewersChanged = next.showViewers !== prefs.showViewers;
       // Native-chat-hide changes can come from the legacy global flag or the per-site/per-layout map.
       const hideChatChanged = next.hideYoutubeChat !== prefs.hideYoutubeChat
         || JSON.stringify(next.sites?.[HOST]?.hideNative) !== JSON.stringify(prefs.sites?.[HOST]?.hideNative);

@@ -20,6 +20,8 @@ function escapeHtml(s) {
 
 // ---------- tabs ----------
 async function activateTab(name, persist = true) {
+  const valid = new Set(["general", "youtube", "chat", "overlays", "timeline", "appearance", "hotkeys", "reset"]);
+  if (!valid.has(name)) name = "general";
   $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".panel").forEach((p) => p.classList.toggle("active", p.dataset.tab === name));
   if (persist) await chrome.storage.local.set({ [UI_KEY]: { tab: name } });
@@ -100,8 +102,7 @@ const defaults = {
   ytLoadOn: "live", hideYoutubeChat: false, disconnectOnHide: false,
   markHighlightedMsgs: true, autoShowHide: false, autoShowWindowSec: 5, autoShowVisibleSec: 8,
   autoShowSurgeFactor: 3, autoShowMinRate: 4,
-  floatingReactions: true, floatingReactionPath: 100,
-  includeCostreamViewers: false, costreamChannels: []
+  floatingReactions: true, floatingReactionPath: 100
 };
 // Per-layout overlay/docked defaults — mirror content.js LAYOUT_MODE_DEFAULTS.
 const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
@@ -167,8 +168,6 @@ async function loadAllFields() {
   $("#floatingReactions").checked = p.floatingReactions !== false;
   $("#floatingReactionPath").value = p.floatingReactionPath ?? 100;
   $("#showViewers").checked = p.showViewers === true;
-  $("#includeCostreamViewers").checked = p.includeCostreamViewers === true;
-  $("#costreamChannels").value = (p.costreamChannels || []).join("\n");
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
   $("#extensionEnabled").checked = p.extensionEnabled !== false;
   $("#highlightTimeline").checked = p.highlightTimeline === true;
@@ -406,12 +405,6 @@ $("#saveAutoShowMinRate").addEventListener("click", async () => {
   flash($("#saveAutoShowMinRate"));
 });
 $("#showViewers").addEventListener("change", async (e) => { await setPrefs({ showViewers: e.target.checked }); });
-$("#includeCostreamViewers").addEventListener("change", async (e) => { await setPrefs({ includeCostreamViewers: e.target.checked }); });
-$("#saveCostreamChannels").addEventListener("click", async () => {
-  const channels = $("#costreamChannels").value.split(/\r?\n/).map((s) => s.trim().toLowerCase()).filter(Boolean);
-  await setPrefs({ costreamChannels: channels });
-  flash($("#saveCostreamChannels"));
-});
 $("#floatingReactions").addEventListener("change", async (e) => { await setPrefs({ floatingReactions: e.target.checked }); });
 $("#saveFloatingReactionPath").addEventListener("click", async () => {
   const v = Math.max(40, Math.min(280, parseInt($("#floatingReactionPath").value, 10) || 100));
