@@ -5,7 +5,9 @@
 node_modules/
 *.zip
 .playwright-mcp/
-.chrome-profile/
 meridian-key.pem
 .pubkey.tmp
-.debug-profile/
+instructions.md
+scripts/build-icons.py
+store/
+todo.md
