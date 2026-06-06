@@ -10,6 +10,22 @@ const GLOBAL_KEY = "meridian.emotes.v3.__global";
 const CHANNEL_TTL = 24 * 60 * 60 * 1000; // 24h
 const GLOBAL_TTL = 24 * 60 * 60 * 1000;
 
+// Twitch FIRST-PARTY global emotes (Kappa, NotLikeThis, …). These never appear in any 3rd-party
+// set, so without this map they couldn't be autocompleted, typed as input chips, or rendered in
+// your OWN sent messages (the self-echo carries no IRC emote tags). Received ones already render
+// via the IRC emote-tag offsets — this is purely so the *names* resolve to an image everywhere
+// else. Curated, well-known name→id pairs (CDN-verified); the v2 emote CDN serves every id below.
+// Merged at LOWEST priority (a 7TV/BTTV/FFZ emote of the same name wins), so it never overrides a
+// channel's custom set. Provider "Twitch" is always enabled (not one of the toggleable providers).
+const TWITCH_GLOBAL = {
+  Kappa: 25, Keepo: 1902, KappaPride: 55338, KappaRoss: 70433, KappaClaus: 72748, PJSalt: 36,
+  "4Head": 354, BabyRage: 22639, BloodTrail: 69, BrokeBack: 4057, cmonBruh: 84608, CoolCat: 58127,
+  DansGame: 33, FailFish: 360, FrankerZ: 65, FUNgineer: 244, Kreygasm: 41, MingLee: 68856,
+  NotLikeThis: 58765, OSFrog: 81248, ResidentSleeper: 245, SeemsGood: 64138, SwiftRage: 34,
+  TriHard: 171, VoHiYo: 81274, WutFace: 28087, HeyGuys: 30259, Jebaited: 90129, EleGiggle: 4339,
+  LUL: 425618, GivePLZ: 112290, TakeNRG: 112291, PogChamp: 305954156
+};
+
 export class EmoteRegistry {
   constructor({ getAuth, onChange, getEnabledProviders }) {
     this.getAuth = getAuth;
@@ -36,10 +52,11 @@ export class EmoteRegistry {
     } else {
       base = this.channel || this.global;
     }
-    // Filter to enabled providers (so users can keep only the sets they want).
+    // Filter to enabled providers (so users can keep only the sets they want). Twitch first-party
+    // globals are always kept — they're not one of the toggleable 3rd-party providers.
     if (enabled) {
       const m = new Map();
-      for (const [name, em] of base) if (enabled.has(em.provider)) m.set(name, em);
+      for (const [name, em] of base) if (em.provider === "Twitch" || enabled.has(em.provider)) m.set(name, em);
       this._merged = m;
     } else {
       this._merged = base;
@@ -64,12 +81,21 @@ export class EmoteRegistry {
     this.onChange();
   }
 
+  // Add Twitch first-party globals to a map at lowest priority (never overrides an existing entry,
+  // so a 3rd-party emote of the same name wins). Applied to `this.global` on every load path.
+  _addTwitchGlobals(map) {
+    for (const [name, id] of Object.entries(TWITCH_GLOBAL)) {
+      if (!map.has(name)) map.set(name, { url: `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`, provider: "Twitch" });
+    }
+    return map;
+  }
+
   async _ensureGlobal() {
     if (this.global) return;
     const cached = await loadCache(GLOBAL_KEY);
     if (cached && cached.emotes && Object.keys(cached.emotes).length > 0
         && Date.now() - cached.fetchedAt < GLOBAL_TTL) {
-      this.global = mapFromObject(cached.emotes);
+      this.global = this._addTwitchGlobals(mapFromObject(cached.emotes));
       this._merged = null;
       return;
     }
@@ -79,7 +105,7 @@ export class EmoteRegistry {
       fetchBttvGlobal(emotes).catch(() => {}),
       fetchFfzGlobal(emotes).catch(() => {})
     ]);
-    this.global = mapFromObject(emotes);
+    this.global = this._addTwitchGlobals(mapFromObject(emotes));
     this._merged = null;
     // Only persist when 7TV succeeded too — otherwise a transient 7TV failure would bake a
     // 7TV-less set into the 24 h cache. Without caching, the next session simply refetches.
