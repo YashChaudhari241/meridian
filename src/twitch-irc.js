@@ -4,8 +4,11 @@
 //   c.connect(); c.join("channelname"); c.say("hi"); c.disconnect();
 
 export class TwitchIRC {
-  constructor({ token, login, displayName, anonymous = false, onMessage, onStatus }) {
+  constructor({ token, login, displayName, anonymous = false, onMessage, onStatus, url }) {
     this.token = token;
+    // Debug hook: point the IRC socket at a local mock server (perf reproduction). Defaults to the
+    // real Twitch endpoint. Never set in production — only via prefs.debugIrcUrl in a debug profile.
+    this.url = url || "wss://irc-ws.chat.twitch.tv:443";
     this.anonymous = anonymous || !token;
     this.login = login.toLowerCase();
     this.displayName = displayName || login;
@@ -64,7 +67,7 @@ export class TwitchIRC {
 
   _open() {
     this.onStatus({ state: "connecting" });
-    const ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+    const ws = new WebSocket(this.url);
     this.ws = ws;
 
     ws.onopen = () => {
@@ -165,6 +168,9 @@ export class TwitchIRC {
           color: tags.color || null,
           text,
           action,
+          // Channel-points "Highlight My Message" redemptions arrive as a normal PRIVMSG carrying
+          // msg-id=highlighted-message — surface it so the overlay can visually mark them.
+          highlighted: tags["msg-id"] === "highlighted-message",
           badges: parseBadges(tags.badges),
           emotes: parseEmotes(tags.emotes, text),
           self: false,
