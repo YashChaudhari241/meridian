@@ -63,11 +63,29 @@
         <option value="all">All videos</option>
       </select>
     </div>
-    <div class="card" id="hideYoutubeChatCard" title="Automatically collapse YouTube's own live chat by default, per layout (re-opening it manually is respected). In a docked layout this also hides Meridian's chat by default, since docked couples their visibility.">
-      <label>Hide YouTube live chat by default</label>
-      <label class="row" id="hideNativeDefaultRow"><span>Default view</span><input id="hideNativeDefault" type="checkbox" /></label>
-      <label class="row" id="hideNativeTheaterRow"><span>Theater</span><input id="hideNativeTheater" type="checkbox" /></label>
-      <label class="row" id="hideNativeFullscreenRow"><span>Fullscreen</span><input id="hideNativeFullscreen" type="checkbox" /></label>
+    <div class="card" id="hideYoutubeChatCard" title="Whether YouTube's live chat starts open or collapsed for each layout (only applied on page load or when you switch layouts). In docked mode Meridian stays coupled with YouTube chat.">
+      <label>YouTube chat by default</label>
+      <div class="row native-chat-row" id="hideNativeDefaultRow">
+        <span class="native-chat-label">Default view</span>
+        <div class="split-pill" data-layout="default">
+          <button type="button" class="split-pill-btn" data-val="show">Show</button>
+          <button type="button" class="split-pill-btn" data-val="hide">Hide</button>
+        </div>
+      </div>
+      <div class="row native-chat-row" id="hideNativeTheaterRow">
+        <span class="native-chat-label">Theater</span>
+        <div class="split-pill" data-layout="theater">
+          <button type="button" class="split-pill-btn" data-val="show">Show</button>
+          <button type="button" class="split-pill-btn" data-val="hide">Hide</button>
+        </div>
+      </div>
+      <div class="row native-chat-row" id="hideNativeFullscreenRow">
+        <span class="native-chat-label">Fullscreen</span>
+        <div class="split-pill" data-layout="fullscreen">
+          <button type="button" class="split-pill-btn" data-val="show">Show</button>
+          <button type="button" class="split-pill-btn" data-val="hide">Hide</button>
+        </div>
+      </div>
     </div>
     <div class="card" title="Keep the overlay inside the player, following theater and fullscreen">
       <label class="row"><span>Bind overlay to the video player</span><input id="boundToPlayer" type="checkbox" /></label>

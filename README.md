@@ -33,7 +33,7 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 - **Per-layout, saved per site** — choose overlay or docked independently for **Default**, **Theater**, and **Fullscreen**. The title-bar dock button toggles the layout you're currently in; the choice sticks for next time. (Kick has Default + Fullscreen only.)
 - **Draggable show/hide bubble** — when chat is hidden, drag the bubble anywhere on screen; its position is remembered.
 - **Auto show on activity surges** (optional) — automatically reveal hidden chat during a burst of messages, then hide it again after a few seconds.
-- **Hide the native live chat by default** per layout (Site tab). In a docked layout this hides Meridian's chat too, since docked couples their visibility; closing Meridian's chat while docked also closes the site's.
+- **YouTube chat by default** per layout — Show or Hide on load / layout change (Site tab split pills). In docked mode Meridian stays coupled with YouTube chat.
 
 ### Chat
 - **Live Twitch IRC**: badges, colors, `/me` actions, and case-correct display names.

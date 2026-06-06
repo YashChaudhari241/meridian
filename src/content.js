@@ -407,6 +407,11 @@
       <span class="meridian-banner-text"></span>
       <span class="meridian-banner-shimmer"></span>
     </div>
+    <div class="meridian-banner meridian-surge-banner">
+      <span class="meridian-banner-dot"></span>
+      <span class="meridian-banner-text">Message surge</span>
+      <span class="meridian-banner-countdown"></span>
+    </div>
     <div class="meridian-viewers" title="Live viewers on Twitch">
       <svg class="meridian-viewers-eye" viewBox="0 0 24 24" width="11" height="11" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
       <span class="meridian-viewers-count"></span>
@@ -444,6 +449,8 @@
     status: root.querySelector(".meridian-status"),
     delayBanner: root.querySelector(".meridian-delay-banner"),
     delayBannerText: root.querySelector(".meridian-delay-banner .meridian-banner-text"),
+    surgeBanner: root.querySelector(".meridian-surge-banner"),
+    surgeCountdown: root.querySelector(".meridian-surge-banner .meridian-banner-countdown"),
     connBanner: root.querySelector(".meridian-conn-banner"),
     connBannerText: root.querySelector(".meridian-conn-banner .meridian-banner-text"),
     viewers: root.querySelector(".meridian-viewers"),
@@ -1032,17 +1039,16 @@
     const pathLen = Math.max(40, Math.min(280, prefs.floatingReactionPath | 0 || 100));
     const angle = Math.random() * Math.PI * 2;
     const perp = angle + Math.PI / 2;
-    const waveAmp = 10 + Math.random() * 14;
-    const waveFreq = 2.5 + Math.random() * 2.5;
-    const dur = 900 + Math.random() * 400;
+    const curve = (Math.random() < 0.5 ? 1 : -1) * (4 + Math.random() * 5); // single gentle arc (~4–9px peak)
+    const dur = 900 + Math.random() * 300;
     const t0 = performance.now();
     (function tick(now) {
       const t = Math.min(1, (now - t0) / dur);
       const ease = 1 - (1 - t) ** 2;
       const along = ease * pathLen;
-      const wave = Math.sin(t * Math.PI * waveFreq) * waveAmp * (1 - t);
-      const x = cx + Math.cos(angle) * along + Math.cos(perp) * wave;
-      const y = cy + Math.sin(angle) * along + Math.sin(perp) * wave;
+      const side = curve * 4 * t * (1 - t); // one parabolic bend, peaks at mid-path
+      const x = cx + Math.cos(angle) * along + Math.cos(perp) * side;
+      const y = cy + Math.sin(angle) * along + Math.sin(perp) * side;
       img.style.transform = `translate(-50%, -50%) translate(${x - cx}px, ${y - cy}px) scale(${1 - t * 0.35})`;
       img.style.opacity = String(1 - t * 0.85);
       if (t < 1) requestAnimationFrame(tick);
@@ -1090,8 +1096,19 @@
   let connState = "connecting";   // connecting | connected | joined | disconnected | error
   let delayPrimed = false;        // true once the first delayed message has been shown this session
   let delayTicker = null;
+  let surgeHideAt = 0;
+  let surgeTicker = null;
+  let autoRevealed = false;      // declared here — updateSurgeBanner reads it (surge auto-reveal)
+  function syncBannerLayout() {
+    const connShowing = els.connBanner.classList.contains("show");
+    const delayShowing = els.delayBanner.classList.contains("show");
+    const surgeShowing = els.surgeBanner.classList.contains("show");
+    root.classList.toggle("meridian-has-banner", connShowing || delayShowing || surgeShowing);
+  }
   function startDelayTicker() { if (!delayTicker) delayTicker = setInterval(updateDelayBanner, 250); }
   function stopDelayTicker() { if (delayTicker) { clearInterval(delayTicker); delayTicker = null; } }
+  function startSurgeTicker() { if (!surgeTicker) surgeTicker = setInterval(updateSurgeBanner, 250); }
+  function stopSurgeTicker() { if (surgeTicker) { clearInterval(surgeTicker); surgeTicker = null; } }
   function updateConnBanner() {
     const connecting = connState === "connecting";
     const failed = connState === "disconnected" || connState === "error";
@@ -1104,24 +1121,43 @@
         : connState === "error" ? "Connection error — reconnecting…" : "Disconnected — reconnecting…";
     }
     updateDelayBanner();          // delay banner is suppressed while the connection banner shows
+    updateSurgeBanner();
   }
   function updateDelayBanner() {
     const delay = prefs.chatDelaySec || 0;
     const head = queue[0];
+    const connShowing = els.connBanner.classList.contains("show");
+    const surgeShowing = els.surgeBanner.classList.contains("show");
     // Buffering indicator only: show while the delay is holding the FIRST message(s) back, and
     // hide for good once a delayed message has actually appeared (delayPrimed). Re-armed on
     // (re)connect / channel switch / delay change.
-    const connShowing = els.connBanner.classList.contains("show");
-    const waiting = delay > 0 && !!head && !delayPrimed && !connShowing;
+    const waiting = delay > 0 && !!head && !delayPrimed && !connShowing && !surgeShowing;
     els.delayBanner.classList.toggle("show", waiting);
-    // Shift the messages down so the (solid) banner never overlaps chat text.
-    root.classList.toggle("meridian-has-banner", waiting || connShowing);
+    syncBannerLayout();
     if (!waiting) { stopDelayTicker(); return; }
     const remain = Math.max(0, Math.ceil((head.ts + delay * 1000 - Date.now()) / 1000));
     els.delayBannerText.textContent = remain > 0
       ? `Buffering — first delayed message in ${remain}s`
       : `Buffering delayed chat…`;
     startDelayTicker();
+  }
+  function autoShowVisibleMs() {
+    return Math.max(1, Math.min(120, prefs.autoShowVisibleSec | 0 || 8)) * 1000;
+  }
+  function updateSurgeBanner() {
+    const connShowing = els.connBanner.classList.contains("show");
+    const show = autoRevealed && effectiveMode() !== "hidden" && !connShowing;
+    els.surgeBanner.classList.toggle("show", show);
+    syncBannerLayout();
+    if (!show) {
+      stopSurgeTicker();
+      if (els.surgeCountdown) els.surgeCountdown.style.width = "0%";
+      return;
+    }
+    const total = autoShowVisibleMs();
+    const remain = Math.max(0, surgeHideAt - Date.now());
+    if (els.surgeCountdown) els.surgeCountdown.style.width = `${Math.min(100, (remain / total) * 100)}%`;
+    startSurgeTicker();
   }
   function schedulePump() {
     if (pumpTimer) return;
@@ -1422,7 +1458,7 @@
       if (boundChanged && effectiveMode() === "overlay") applyBoundMode();
       if (blocklistChanged) rebuildBlockSet();
       if (loadOnChanged) syncPageActive(); // live-only ⇄ all may mount/unmount this page
-      if (hideChatChanged) { hideNativeAppliedKey = null; lastLayoutApplied = null; applyHideNativeChatOnce(); applyMode(); }
+      if (hideChatChanged) { hideNativeAppliedKey = null; lastLayoutApplied = null; applyNativeChatDefaultOnce(); applyMode(); }
       if (disconnectOnHideChanged) applyMode(); // connect/disconnect to match the new policy if hidden
       if (modeChanged || layoutModesChanged) applyMode();
       if (highlightChanged) refreshHighlightState();
@@ -1440,7 +1476,7 @@
     // service worker on reload), keep retrying on the 2 s poll instead of waiting for a manual
     // reconnect. The `connecting` guard inside ensureConnected makes overlapping calls a no-op.
     if (!irc && shouldConnect()) ensureConnected();
-    applyHideNativeChatOnce();
+    applyNativeChatDefaultOnce();
     ensureNativeChatObserver();
     ensureLayoutObserver();
     const h = SITE.detectHandle();
@@ -1512,14 +1548,20 @@
   // ("return to prior state"). Site-agnostic + independent of the YouTube-live density wave.
   let rateStamps = [];       // arrival ts of recent 'msg's, trimmed to the window each tick
   let baselineRate = 0;      // EMA of per-second msg rate (auto-calibrating)
-  let autoRevealed = false;  // chat was auto-revealed by a surge (vs shown by the user)
   let autoHideTimer = null;
   function autoShowWindowMs() { return Math.max(1, Math.min(60, prefs.autoShowWindowSec | 0 || 5)) * 1000; }
   function noteMsgForRate(ts) { if (prefs.autoShowHide) rateStamps.push(ts || Date.now()); }
   function cancelAutoHide() { if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; } }
-  // Called by every explicit user action (show/hide/focus/dock) + by in-overlay activity, so the
-  // surge-reveal hands control back to the user instead of yanking the chat away under them.
-  function clearAutoReveal() { autoRevealed = false; cancelAutoHide(); }
+  function clearAutoReveal() {
+    autoRevealed = false;
+    surgeHideAt = 0;
+    cancelAutoHide();
+    updateSurgeBanner();
+  }
+  function cancelSurgeAutoHide() {
+    if (!autoRevealed) return;
+    clearAutoReveal();
+  }
   setInterval(() => {
     if (!prefs.autoShowHide) { if (rateStamps.length) rateStamps.length = 0; return; }
     const now = Date.now();
@@ -1532,14 +1574,17 @@
     baselineRate = baselineRate ? baselineRate * 0.8 + rate * 0.2 : rate; // slow EMA (after the test)
     if (surge && pageActive && effectiveMode() === "hidden" && !autoRevealed) {
       autoRevealed = true;
-      revealChat();
-      const visMs = Math.max(1, Math.min(120, prefs.autoShowVisibleSec | 0 || 8)) * 1000;
-      cancelAutoHide();
-      autoHideTimer = setTimeout(() => {
-        autoHideTimer = null;
-        if (autoRevealed && effectiveMode() !== "hidden") { autoRevealed = false; hideChat(); }
-        else autoRevealed = false;
-      }, visMs);
+      const visMs = autoShowVisibleMs();
+      surgeHideAt = Date.now() + visMs;
+      revealChat().then(() => {
+        cancelAutoHide();
+        updateSurgeBanner();
+        autoHideTimer = setTimeout(() => {
+          autoHideTimer = null;
+          if (autoRevealed && effectiveMode() !== "hidden") hideChat();
+          else clearAutoReveal();
+        }, visMs);
+      });
     }
   }, 1000);
 
@@ -1655,8 +1700,9 @@
   function bumpActivity() {
     root.classList.remove("meridian-idle");
     startIdleTimer();
-    if (autoRevealed) clearAutoReveal(); // user engaged the auto-revealed chat → stop the auto re-hide
   }
+  // Clicks (not hover) on the overlay cancel a surge auto-hide for this instance.
+  root.addEventListener("click", cancelSurgeAutoHide);
   // Activity = mouse/keys/wheel inside the overlay OR keeping focus on an input.
   root.addEventListener("mouseenter", bumpActivity);
   root.addEventListener("mousemove", bumpActivity);
@@ -2838,24 +2884,46 @@
     if (siteHidden()) return "hidden";
     return layoutMode();
   }
-  // "Hide the site's native chat by default" (per layout). One-shot per video+layout — only on
-  // initial page load or when the layout/video changes, never on the 2 s poll (so a manual
-  // re-open via YouTube's chat button isn't immediately fought).
+  // Per-layout YouTube native chat default (show or hide) on page load / layout change only.
   let hideNativeAppliedKey = null;
   function hideNativeKey() { return (SITE.videoId?.() || "") + "|" + currentLayout(); }
-  function markHideNativeApplied() { hideNativeAppliedKey = hideNativeKey(); }
-  function applyHideNativeChatOnce() {
-    if (!hideNativeForLayout() || !SITE.nativeChatExists?.()) return;
+  // Apply the saved show/hide default for a layout. Returns whether the transient hidden flag changed.
+  function nativeChatDefaultActions(layout) {
+    if (!SITE.nativeChatExists?.()) return { hiddenChanged: false };
+    const hide = hideNativeForLayout(layout);
+    const docked = layoutMode(layout) === "docked";
+    let hiddenChanged = false;
+    if (hide) {
+      if (SITE.isNativeChatOpen?.()) setNativeChat(false);
+      if (docked && !siteHidden()) {
+        const sites = { ...(prefs.sites || {}) };
+        sites[HOST] = { ...(sites[HOST] || {}), hidden: true };
+        prefs.sites = sites;
+        savePrefs();
+        hiddenChanged = true;
+      }
+    } else {
+      if (!SITE.isNativeChatOpen?.()) setNativeChat(true);
+      if (docked) {
+        dockChatTab = "native";
+        if (siteHidden()) {
+          const sites = { ...(prefs.sites || {}) };
+          sites[HOST] = { ...(sites[HOST] || {}), hidden: false };
+          prefs.sites = sites;
+          savePrefs();
+          hiddenChanged = true;
+        } else applyDockTab();
+      }
+    }
+    return { hiddenChanged };
+  }
+  function applyNativeChatDefaultOnce() {
     const key = hideNativeKey();
     if (key === hideNativeAppliedKey) return;
     hideNativeAppliedKey = key;
-    if (SITE.isNativeChatOpen?.()) setNativeChat(false);
-    if (layoutMode() === "docked" && !siteHidden()) {
-      const sites = { ...(prefs.sites || {}) };
-      sites[HOST] = { ...(sites[HOST] || {}), hidden: true };
-      prefs.sites = sites;
-      savePrefs();
-    }
+    const { hiddenChanged } = nativeChatDefaultActions(currentLayout());
+    if (hiddenChanged) applyMode();
+    else if (!hideNativeForLayout() && layoutMode() === "docked") applyDockTab();
   }
   // Set the transient show/hide flag (bubble / × / hotkey). Kept separate from the per-layout mode
   // so revealing returns to the layout's chosen overlay/docked.
@@ -2881,26 +2949,15 @@
     await savePrefs();
     applyMode();
   }
-  // Apply a layout's "hide native by default" the first time we enter that layout: collapse the
-  // site's chat, and — in a docked layout — hide our overlay too (so "both chats hidden by default").
-  // Guarded by lastLayoutApplied (declared near the top) so we only do it on the transition, never
-  // fighting a manual reveal.
+  // Apply a layout's YouTube-chat show/hide default the first time we enter that layout (one-shot,
+  // never on the 2 s poll). In docked mode Meridian visibility stays coupled with native chat.
   function applyLayoutDefaults() {
     const layout = currentLayout();
     if (!pageActive) { lastLayoutApplied = null; return; }
     if (layout === lastLayoutApplied) return;
     lastLayoutApplied = layout;
-    if (!hideNativeForLayout(layout)) return;
-    markHideNativeApplied();
-    setNativeChat(false);
-    if (layoutMode(layout) === "docked" && !siteHidden()) {
-      // Hide our overlay too. Write the flag directly (no applyMode re-dispatch — the caller, which
-      // is applyMode itself, continues with the updated flag).
-      const sites = { ...(prefs.sites || {}) };
-      sites[HOST] = { ...(sites[HOST] || {}), hidden: true };
-      prefs.sites = sites;
-      savePrefs();
-    }
+    hideNativeAppliedKey = hideNativeKey();
+    nativeChatDefaultActions(layout); // caller is applyMode — don't re-dispatch
   }
   // Visual half — safe to run during setup (touches only DOM/classes, no irc/queue).
   function applyModeVisual() {

@@ -311,6 +311,18 @@
 .meridian-conn-banner { --banner-color: 86, 168, 255; }          /* blue: connecting */
 .meridian-conn-banner.error { --banner-color: 255, 92, 92; }     /* red: error / disconnected */
 .meridian-delay-banner { --banner-color: 130, 87, 255; }         /* violet: delay buffering */
+.meridian-surge-banner { --banner-color: 255, 170, 64; }       /* amber: activity-surge auto-reveal */
+.meridian-surge-banner .meridian-banner-shimmer { display: none; }
+.meridian-banner-countdown {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: rgb(var(--banner-color));
+  transform-origin: left center;
+  pointer-events: none;
+}
 @keyframes meridian-banner-pulse {
   0%, 100% { opacity: 0.4; transform: scale(0.82); }
   50% { opacity: 1; transform: scale(1.15); box-shadow: 0 0 6px rgba(var(--banner-color), 0.9); }

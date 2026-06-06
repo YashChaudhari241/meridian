@@ -279,13 +279,23 @@ function hideNativeValue(p) {
     fullscreen: typeof hn.fullscreen === "boolean" ? hn.fullscreen : false
   };
 }
-async function writeHideNative(layout, val) {
+async function writeHideNative(layout, hide) {
   const cur = await getPrefs();
   const sites = { ...(cur.sites || {}) };
   const entry = { ...(sites[activeHost] || {}) };
-  entry.hideNative = { ...hideNativeValue(cur), [layout]: val };
+  entry.hideNative = { ...hideNativeValue(cur), [layout]: hide };
   sites[activeHost] = entry;
   await setPrefs({ sites });
+}
+function setNativeChatPill(group, hide) {
+  group.querySelector('[data-val="show"]').classList.toggle("active", !hide);
+  group.querySelector('[data-val="hide"]').classList.toggle("active", !!hide);
+}
+function syncNativeChatPills(p) {
+  const hn = hideNativeValue(p);
+  document.querySelectorAll(".split-pill[data-layout]").forEach((g) => {
+    setNativeChatPill(g, hn[g.dataset.layout]);
+  });
 }
 
 async function initSiteCard() {
@@ -318,18 +328,21 @@ async function initSiteCard() {
   $("#modeDefault").value = lm.default;
   $("#modeTheater").value = lm.theater;
   $("#modeFullscreen").value = lm.fullscreen;
-  const hn = hideNativeValue(p);
-  $("#hideNativeDefault").checked = hn.default;
-  $("#hideNativeTheater").checked = hn.theater;
-  $("#hideNativeFullscreen").checked = hn.fullscreen;
+  syncNativeChatPills(p);
 }
 
 $("#modeDefault").addEventListener("change", (e) => { if (activeHost && hostSupported) writeLayoutMode("default", e.target.value); });
 $("#modeTheater").addEventListener("change", (e) => { if (activeHost && hostSupported) writeLayoutMode("theater", e.target.value); });
 $("#modeFullscreen").addEventListener("change", (e) => { if (activeHost && hostSupported) writeLayoutMode("fullscreen", e.target.value); });
-$("#hideNativeDefault").addEventListener("change", (e) => { if (activeHost) writeHideNative("default", e.target.checked); });
-$("#hideNativeTheater").addEventListener("change", (e) => { if (activeHost) writeHideNative("theater", e.target.checked); });
-$("#hideNativeFullscreen").addEventListener("change", (e) => { if (activeHost) writeHideNative("fullscreen", e.target.checked); });
+$("#hideYoutubeChatCard").addEventListener("click", (e) => {
+  const btn = e.target.closest(".split-pill-btn");
+  if (!btn || !activeHost) return;
+  const pill = btn.closest(".split-pill");
+  const layout = pill?.dataset.layout;
+  if (!layout) return;
+  writeHideNative(layout, btn.dataset.val === "hide");
+  setNativeChatPill(pill, btn.dataset.val === "hide");
+});
 
 // ---------- Site / player binding ----------
 $("#boundToPlayer").addEventListener("change", async (e) => { await setPrefs({ boundToPlayer: e.target.checked }); });
@@ -681,6 +694,6 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA") && a.type !== "checkbox" && a.type !== "color") return;
   loadAllFields();
   // Re-sync the per-layout mode selects + hide-native checkboxes (unless the user is editing one).
-  const editingSiteCtl = a && (a.id?.startsWith("mode") || a.id?.startsWith("hideNative"));
+  const editingSiteCtl = a && (a.id?.startsWith("mode") || a.closest?.(".split-pill"));
   if (activeHost && !editingSiteCtl) initSiteCard();
 });
