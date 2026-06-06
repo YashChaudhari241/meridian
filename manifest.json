@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Meridian — Twitch Chat Overlay",
+  "name": "Meridian — Twitch Chat for YouTube™ & Kick",
   "version": "1.0.0",
-  "description": "Watch YouTube videos with a draggable, transparent Twitch chat overlay. Map YouTube channels to Twitch channels.",
+  "description": "Bring Twitch chat to YouTube™ & Kick. Transparent overlay, docked mode, 3rd-party emotes, chat delay, highlights.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApIiP8zdQn9HiZkQmp4q0CdFuLy1/45S9LTLWHvSWNOj8a8agoxc9uw8jAVM4aJpg2kr++L4FTGEo1W0q7nTrRNi3JPC0VgvFCL2hKHxSet6ZkeGoEl1hcwVu3zH81qXnyqQUkPfflY/D9ShCpQQQN8W3VaUqyOVcmwf2LDmCs80MKl0Cec6IFUdV28VoeVBFswLxDf+DbYvJ6/jb7SpuRBXuUYzMqgPl7CZH3XOoDWMGKVmT/o79nyhZDbB7VGmIlNrXsCvs2qS7HI+U//eCrcf26mY52nWzkK8uWz+lY+n+H1PZURt5FN0ipUoauyt6s8gy/Bg2CGo4zFyJJ/2jCQIDAQAB",
   "icons": {
     "16": "icons/meridian-16.png",
