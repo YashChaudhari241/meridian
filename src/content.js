@@ -136,6 +136,7 @@
     floatingReactions: true,     // float emotes out of the show-chat bubble while chat is hidden
     floatingReactionPath: 100,   // px travel distance for floating reaction emotes
     floatingReactionDurationMs: 1400, // emote float animation length (ms)
+    floatingReactionStartDelayMs: 1200, // wait after bubble appears before first emote (ms)
     bubblePos: null              // { left, top } of the draggable show-chat bubble (viewport coords)
   };
 
@@ -1028,9 +1029,20 @@
     if (!toggleBtn.classList.contains("show")) return;
     if (!irc || connState !== "joined") return;
     if (effectiveMode() !== "hidden") return;
+    if (!floatBubbleShownAt) return;
+    const startDelay = Math.max(0, Math.min(10000, prefs.floatingReactionStartDelayMs | 0 || 1200));
+    if (Date.now() - floatBubbleShownAt < startDelay) return;
     const emotes = emotesInMessage(m);
     if (!emotes.length) return;
     spawnFloatingReaction(emotes[Math.floor(Math.random() * emotes.length)].url);
+  }
+  let floatBubbleShownAt = 0;   // when the show-chat bubble last became visible (start-delay anchor)
+  const activeFloatRaf = new Set();
+  function clearFloatingReactions() {
+    for (const id of activeFloatRaf) cancelAnimationFrame(id);
+    activeFloatRaf.clear();
+    floatLayer.replaceChildren();
+    floatBubbleShownAt = 0;
   }
   function spawnFloatingReaction(url) {
     const rect = toggleBtn.getBoundingClientRect();
@@ -1050,18 +1062,28 @@
     const base = Math.max(400, Math.min(4000, prefs.floatingReactionDurationMs | 0 || 1400));
     const dur = base * (0.92 + Math.random() * 0.16);
     const t0 = performance.now();
-    (function tick(now) {
+    let rafId = 0;
+    const tick = (now) => {
+      if (!img.isConnected) { activeFloatRaf.delete(rafId); return; }
       const t = Math.min(1, (now - t0) / dur);
       const ease = 1 - (1 - t) ** 2;
       const along = ease * pathLen;
-      const side = curve * 4 * t * (1 - t); // one parabolic bend, peaks at mid-path
+      const side = curve * 4 * t * (1 - t);
       const x = cx + Math.cos(angle) * along + Math.cos(perp) * side;
       const y = cy + Math.sin(angle) * along + Math.sin(perp) * side;
       img.style.transform = `translate(-50%, -50%) translate(${x - cx}px, ${y - cy}px) scale(${1 - t * 0.35})`;
       img.style.opacity = String(1 - t * 0.85);
-      if (t < 1) requestAnimationFrame(tick);
-      else img.remove();
-    })(t0);
+      if (t < 1) {
+        activeFloatRaf.delete(rafId);
+        rafId = requestAnimationFrame(tick);
+        activeFloatRaf.add(rafId);
+      } else {
+        activeFloatRaf.delete(rafId);
+        img.remove();
+      }
+    };
+    rafId = requestAnimationFrame(tick);
+    activeFloatRaf.add(rafId);
   }
 
   // --- delay queue + update-frequency batching ---
@@ -2805,6 +2827,8 @@
     // can bring chat back. The chat is the only way back, so it's never itself hidden.
     const show = pageActive && root.classList.contains("meridian-hidden");
     toggleBtn.classList.toggle("show", show);
+    if (show) floatBubbleShownAt = Date.now();
+    else clearFloatingReactions();
     // Apply the saved drag position (clamped to the current viewport), overriding the CSS top/right.
     if (show && prefs.bubblePos && Number.isFinite(prefs.bubblePos.left) && Number.isFinite(prefs.bubblePos.top)) {
       const bw = toggleBtn.offsetWidth || 32, bh = toggleBtn.offsetHeight || 32;
@@ -2974,9 +2998,10 @@
   // Visual half — safe to run during setup (touches only DOM/classes, no irc/queue).
   function applyModeVisual() {
     // On a page with no video (home/search feed), keep everything torn down + invisible.
-    if (!pageActive) { undock(); hideOverlay(); updateModeButton(); appliedMode = "inactive"; return; }
+    if (!pageActive) { clearFloatingReactions(); undock(); hideOverlay(); updateModeButton(); appliedMode = "inactive"; return; }
     const mode = effectiveMode();
     appliedMode = mode;
+    if (mode !== "hidden") clearFloatingReactions();
     if (mode === "hidden") { undock(); hideOverlay(); updateModeButton(); return; }
     root.classList.remove("meridian-hidden");
     if (mode === "docked") dock(); else undock();
