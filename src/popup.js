@@ -97,8 +97,11 @@ const defaults = {
   highlightPersistEmotes: true, highlightPersistDensity: true, showViewers: false,
   emote7tv: true, emoteBttv: true, emoteFfz: true,
   textStyle: "shadow", boldText: true,
-  ytLoadOn: "live"
+  ytLoadOn: "live", hideYoutubeChat: false, disconnectOnHide: false,
+  markHighlightedMsgs: true, autoShowHide: false, autoShowWindowSec: 5, autoShowVisibleSec: 8
 };
+// Per-layout overlay/docked defaults — mirror content.js LAYOUT_MODE_DEFAULTS.
+const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
 
 async function getPrefs() {
   const o = await chrome.storage.local.get(PREFS_KEY);
@@ -151,6 +154,11 @@ async function loadAllFields() {
   $("#boundToPlayer").checked = p.boundToPlayer !== false;
   $("#ytLoadOn").value = p.ytLoadOn === "all" ? "all" : "live";
   $("#hideDeleted").checked = p.hideDeleted === true;
+  $("#disconnectOnHide").checked = p.disconnectOnHide === true;
+  $("#markHighlightedMsgs").checked = p.markHighlightedMsgs !== false;
+  $("#autoShowHide").checked = p.autoShowHide === true;
+  $("#autoShowWindow").value = p.autoShowWindowSec ?? 5;
+  $("#autoShowVisible").value = p.autoShowVisibleSec ?? 8;
   $("#showViewers").checked = p.showViewers === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
   $("#extensionEnabled").checked = p.extensionEnabled !== false;
@@ -236,43 +244,84 @@ async function detectActiveTab() {
   hostSupported = activeHost ? isSupportedHost(activeHost) : false;
 }
 
-function siteModeValue(p) {
-  const m = p.sites?.[activeHost]?.mode;
-  return (m === "overlay" || m === "docked" || m === "auto") ? m : "auto";
+// Per-layout overlay/docked map for the active host, migrating a legacy site-wide `.mode`.
+function layoutModesValue(p) {
+  const e = p.sites?.[activeHost];
+  if (e?.layoutModes) return { ...LAYOUT_MODE_DEFAULTS, ...e.layoutModes };
+  if (e?.mode === "overlay") return { default: "overlay", theater: "overlay", fullscreen: "overlay" };
+  if (e?.mode === "docked") return { default: "docked", theater: "docked", fullscreen: "docked" };
+  return { ...LAYOUT_MODE_DEFAULTS };
+}
+async function writeLayoutMode(layout, mode) {
+  const cur = await getPrefs();
+  const sites = { ...(cur.sites || {}) };
+  const entry = { ...(sites[activeHost] || {}) };
+  entry.layoutModes = { ...layoutModesValue(cur), [layout]: mode };
+  delete entry.mode;
+  sites[activeHost] = entry;
+  await setPrefs({ sites });
+}
+// Per-layout "hide native chat by default", with the legacy global flag as the Default-layout fallback.
+function hideNativeValue(p) {
+  const hn = p.sites?.[activeHost]?.hideNative || {};
+  const legacy = p.hideYoutubeChat === true;
+  return {
+    default: typeof hn.default === "boolean" ? hn.default : legacy,
+    theater: typeof hn.theater === "boolean" ? hn.theater : false,
+    fullscreen: typeof hn.fullscreen === "boolean" ? hn.fullscreen : false
+  };
+}
+async function writeHideNative(layout, val) {
+  const cur = await getPrefs();
+  const sites = { ...(cur.sites || {}) };
+  const entry = { ...(sites[activeHost] || {}) };
+  entry.hideNative = { ...hideNativeValue(cur), [layout]: val };
+  sites[activeHost] = entry;
+  await setPrefs({ sites });
 }
 
 async function initSiteCard() {
   const card = $("#siteCard");
-  const sel = $("#siteMode");
+  const modeCard = $("#modeCard");
   const isYouTube = activeHost ? /(^|\.)youtube\.com$/.test(activeHost) : false;
   $("#ytLoadOnCard").style.display = isYouTube ? "" : "none";
+  $("#hideYoutubeChatCard").style.display = isYouTube ? "" : "none";
+  // Theater is a YouTube-only layout — hide its rows on Kick.
+  $("#modeTheaterRow").style.display = isYouTube ? "" : "none";
+  $("#hideNativeTheaterRow").style.display = isYouTube ? "" : "none";
   // Mappings are editable from ANY site (not just youtube.com / kick.com), so both editors show always.
   $("#ytMappingsCard").style.display = "";
   $("#kickMappingsCard").style.display = "";
+  const modeSelects = ["#modeDefault", "#modeTheater", "#modeFullscreen"].map($);
   if (!activeHost || !/^https?:/.test(activeTab?.url || "")) {
-    card.style.display = "none"; sel.disabled = true; return;
+    card.style.display = "none"; modeSelects.forEach((s) => (s.disabled = true)); return;
   }
   card.style.display = "";
   $("#siteEnabledLabel").textContent = activeHost;
   if (!hostSupported) {
-    sel.disabled = true;
+    modeSelects.forEach((s) => (s.disabled = true));
     $("#siteHint").textContent = "Not a supported site. Meridian works on youtube.com and kick.com.";
     return;
   }
-  sel.disabled = false;
+  modeSelects.forEach((s) => (s.disabled = false));
   $("#siteHint").textContent = "Supported site.";
   const p = await getPrefs();
-  sel.value = siteModeValue(p);
+  const lm = layoutModesValue(p);
+  $("#modeDefault").value = lm.default;
+  $("#modeTheater").value = lm.theater;
+  $("#modeFullscreen").value = lm.fullscreen;
+  const hn = hideNativeValue(p);
+  $("#hideNativeDefault").checked = hn.default;
+  $("#hideNativeTheater").checked = hn.theater;
+  $("#hideNativeFullscreen").checked = hn.fullscreen;
 }
 
-$("#siteMode").addEventListener("change", async (e) => {
-  if (!activeHost || !hostSupported) return;
-  const v = e.target.value; // auto | overlay | docked
-  const cur = await getPrefs();
-  const sites = { ...(cur.sites || {}) };
-  sites[activeHost] = { ...(sites[activeHost] || {}), mode: v, hidden: false };
-  await setPrefs({ sites });
-});
+$("#modeDefault").addEventListener("change", (e) => { if (activeHost && hostSupported) writeLayoutMode("default", e.target.value); });
+$("#modeTheater").addEventListener("change", (e) => { if (activeHost && hostSupported) writeLayoutMode("theater", e.target.value); });
+$("#modeFullscreen").addEventListener("change", (e) => { if (activeHost && hostSupported) writeLayoutMode("fullscreen", e.target.value); });
+$("#hideNativeDefault").addEventListener("change", (e) => { if (activeHost) writeHideNative("default", e.target.checked); });
+$("#hideNativeTheater").addEventListener("change", (e) => { if (activeHost) writeHideNative("theater", e.target.checked); });
+$("#hideNativeFullscreen").addEventListener("change", (e) => { if (activeHost) writeHideNative("fullscreen", e.target.checked); });
 
 // ---------- Site / player binding ----------
 $("#boundToPlayer").addEventListener("change", async (e) => { await setPrefs({ boundToPlayer: e.target.checked }); });
@@ -320,6 +369,21 @@ $("#saveMaxMessages").addEventListener("click", async () => {
   flash($("#saveMaxMessages"));
 });
 $("#hideDeleted").addEventListener("change", async (e) => { await setPrefs({ hideDeleted: e.target.checked }); });
+$("#disconnectOnHide").addEventListener("change", async (e) => { await setPrefs({ disconnectOnHide: e.target.checked }); });
+$("#markHighlightedMsgs").addEventListener("change", async (e) => { await setPrefs({ markHighlightedMsgs: e.target.checked }); });
+$("#autoShowHide").addEventListener("change", async (e) => { await setPrefs({ autoShowHide: e.target.checked }); });
+$("#saveAutoShowWindow").addEventListener("click", async () => {
+  const v = Math.max(1, Math.min(60, parseInt($("#autoShowWindow").value, 10) || 5));
+  await setPrefs({ autoShowWindowSec: v });
+  $("#autoShowWindow").value = v;
+  flash($("#saveAutoShowWindow"));
+});
+$("#saveAutoShowVisible").addEventListener("click", async () => {
+  const v = Math.max(1, Math.min(120, parseInt($("#autoShowVisible").value, 10) || 8));
+  await setPrefs({ autoShowVisibleSec: v });
+  $("#autoShowVisible").value = v;
+  flash($("#saveAutoShowVisible"));
+});
 $("#showViewers").addEventListener("change", async (e) => { await setPrefs({ showViewers: e.target.checked }); });
 $("#highlightTimeline").addEventListener("change", async (e) => {
   await setPrefs({ highlightTimeline: e.target.checked });
@@ -589,7 +653,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   const a = document.activeElement;
   if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA") && a.type !== "checkbox" && a.type !== "color") return;
   loadAllFields();
-  if (activeHost && hostSupported && a !== $("#siteMode")) {
-    $("#siteMode").value = siteModeValue(await getPrefs());
-  }
+  // Re-sync the per-layout mode selects + hide-native checkboxes (unless the user is editing one).
+  const editingSiteCtl = a && (a.id?.startsWith("mode") || a.id?.startsWith("hideNative"));
+  if (activeHost && !editingSiteCtl) initSiteCard();
 });

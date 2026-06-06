@@ -37,13 +37,14 @@
       <label class="row"><span>Extension enabled</span><input id="extensionEnabled" type="checkbox" /></label>
       <div class="hint">Inject Meridian on supported sites.</div>
     </div>
-    <div class="card" title="How chat appears on this site, saved per site. Auto floats in fullscreen and docks otherwise">
+    <div class="card" id="modeCard" title="How chat appears on this site, saved per layout. Toggling the dock button in any layout updates that layout here.">
       <label>Display mode (this site)</label>
-      <select id="siteMode">
-        <option value="auto">Auto (overlay in fullscreen, docked otherwise)</option>
-        <option value="overlay">Overlay (floating)</option>
-        <option value="docked">Docked (in the page)</option>
-      </select>
+      <div class="row" id="modeDefaultRow"><span style="flex:1; font-size:13.5px; color:var(--fg-2);">Default view</span>
+        <select id="modeDefault"><option value="overlay">Overlay</option><option value="docked">Docked</option></select></div>
+      <div class="row" id="modeTheaterRow"><span style="flex:1; font-size:13.5px; color:var(--fg-2);">Theater</span>
+        <select id="modeTheater"><option value="overlay">Overlay</option><option value="docked">Docked</option></select></div>
+      <div class="row" id="modeFullscreenRow"><span style="flex:1; font-size:13.5px; color:var(--fg-2);">Fullscreen</span>
+        <select id="modeFullscreen"><option value="overlay">Overlay</option><option value="docked">Docked</option></select></div>
     </div>
   </section>
 
@@ -59,6 +60,12 @@
         <option value="live">Livestreams only</option>
         <option value="all">All videos</option>
       </select>
+    </div>
+    <div class="card" id="hideYoutubeChatCard" title="Automatically collapse YouTube's own live chat by default, per layout (re-opening it manually is respected). In a docked layout this also hides Meridian's chat by default, since docked couples their visibility.">
+      <label>Hide YouTube live chat by default</label>
+      <label class="row" id="hideNativeDefaultRow"><span>Default view</span><input id="hideNativeDefault" type="checkbox" /></label>
+      <label class="row" id="hideNativeTheaterRow"><span>Theater</span><input id="hideNativeTheater" type="checkbox" /></label>
+      <label class="row" id="hideNativeFullscreenRow"><span>Fullscreen</span><input id="hideNativeFullscreen" type="checkbox" /></label>
     </div>
     <div class="card" title="Keep the overlay inside the player, following theater and fullscreen">
       <label class="row"><span>Bind overlay to the video player</span><input id="boundToPlayer" type="checkbox" /></label>
@@ -160,6 +167,25 @@
     </details>
     <div class="card" title="Show the channel's live Twitch viewer count in a pill on the overlay. Requires connecting your Twitch account; updates about once a minute.">
       <label class="row"><span>Live viewer count (requires Twitch sign-in)</span><input id="showViewers" type="checkbox" /></label>
+    </div>
+    <div class="card" title="When you hide the chat, also disconnect from Twitch. Off (default): hiding is visual only — emotes, highlights and the timeline keep processing in the background.">
+      <label class="row"><span>Disconnect chat on hide</span><input id="disconnectOnHide" type="checkbox" /></label>
+    </div>
+    <div class="card" title="Automatically reveal the chat (while it's hidden) during a burst of activity, then hide it again. Detects a spike in messages/second relative to the recent baseline.">
+      <label class="row"><span>Auto show chat on activity surges</span><input id="autoShowHide" type="checkbox" /></label>
+      <label style="margin-top:10px;" title="Length of the rolling window the surge rate is measured over">Surge window (seconds)</label>
+      <div class="row">
+        <input id="autoShowWindow" type="number" min="1" max="60" step="1" />
+        <button id="saveAutoShowWindow">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="How long the auto-revealed chat stays visible before hiding again">Stay visible for (seconds)</label>
+      <div class="row">
+        <input id="autoShowVisible" type="number" min="1" max="120" step="1" />
+        <button id="saveAutoShowVisible">Save</button>
+      </div>
+    </div>
+    <div class="card" title="Visually mark channel-points &quot;Highlight My Message&quot; redemptions with a purple wash">
+      <label class="row"><span>Highlight redeemed messages</span><input id="markHighlightedMsgs" type="checkbox" /></label>
     </div>
     <div class="card" title="Remove moderated messages instead of dimming them">
       <label class="row"><span>Hide deleted messages</span><input id="hideDeleted" type="checkbox" /></label>
