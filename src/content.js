@@ -348,6 +348,7 @@
   let appliedMode = "inactive"; // last display mode actually applied (drives auto re-apply)
   let lastLayoutApplied = null;  // last YouTube layout we applied per-layout defaults for (declared
                                  // early to avoid a TDZ: applyMode() runs during setup, below).
+  let hideNativeAppliedKey = null; // one-shot native-chat default per video+layout (same reason)
   // Per-layout overlay/docked defaults, preserving the old "auto" behavior (docks when a chat column
   // exists, floats in fullscreen). Declared early — effectiveMode()→layoutMode() reads it at setup.
   const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
@@ -2885,7 +2886,6 @@
     return layoutMode();
   }
   // Per-layout YouTube native chat default (show or hide) on page load / layout change only.
-  let hideNativeAppliedKey = null;
   function hideNativeKey() { return (SITE.videoId?.() || "") + "|" + currentLayout(); }
   // Apply the saved show/hide default for a layout. Returns whether the transient hidden flag changed.
   function nativeChatDefaultActions(layout) {
