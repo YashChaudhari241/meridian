@@ -135,6 +135,7 @@
     autoShowMinRate: 4,          // absolute floor (msgs/sec) so a quiet→2-msg blip can't fire
     floatingReactions: true,     // float emotes out of the show-chat bubble while chat is hidden
     floatingReactionPath: 100,   // px travel distance for floating reaction emotes
+    floatingReactionDurationMs: 1400, // emote float animation length (ms)
     bubblePos: null              // { left, top } of the draggable show-chat bubble (viewport coords)
   };
 
@@ -165,6 +166,10 @@
   // Each host runs the same overlay; adapters differ only in how we find the video
   // player (for bound mode) and how we detect the channel handle (for mappings).
   const HOST = location.hostname.replace(/^www\./, "");
+  function dockChatTabPref() {
+    const t = prefs.sites?.[HOST]?.dockChatTab;
+    return (t === "native" || t === "twitch") ? t : "twitch";
+  }
   const youtubeAdapter = {
     name: "youtube",
     findPlayer: () => document.querySelector("#movie_player"),
@@ -343,7 +348,8 @@
   // setup — a `const` lower in the file would be in its temporal dead zone and throw, aborting init.
   const THEATER_CHAT_W = 402;   // YouTube's default live-chat column width
   let reFsUntil = 0, reFsEl = null; // brief window to re-enter fullscreen after an in-input Esc
-  let dockChatTab = "twitch";  // which chat is shown while docked; default to ours
+  let dockChatTab = "twitch";  // which chat is shown while docked; restored from prefs.sites[HOST].dockChatTab
+  dockChatTab = dockChatTabPref();
   let pageActive = false;      // true only when the page actually has a video/stream player
   let appliedMode = "inactive"; // last display mode actually applied (drives auto re-apply)
   let lastLayoutApplied = null;  // last YouTube layout we applied per-layout defaults for (declared
@@ -555,7 +561,7 @@
     clearAutoReveal();
     const layout = currentLayout();
     const next = layoutMode(layout) === "docked" ? "overlay" : "docked";
-    if (next === "docked") { setNativeChat(true); dockChatTab = "twitch"; }
+    if (next === "docked") setNativeChat(true);
     else setNativeChat(false);
     setLayoutMode(layout, next);
   });
@@ -1041,7 +1047,8 @@
     const angle = Math.random() * Math.PI * 2;
     const perp = angle + Math.PI / 2;
     const curve = (Math.random() < 0.5 ? 1 : -1) * (4 + Math.random() * 5); // single gentle arc (~4–9px peak)
-    const dur = 900 + Math.random() * 300;
+    const base = Math.max(400, Math.min(4000, prefs.floatingReactionDurationMs | 0 || 1400));
+    const dur = base * (0.92 + Math.random() * 0.16);
     const t0 = performance.now();
     (function tick(now) {
       const t = Math.min(1, (now - t0) / dur);
@@ -1446,6 +1453,7 @@
       // (e.g. editing the theater mode while windowed) — re-dispatch so it's live next transition.
       const layoutModesChanged = JSON.stringify(next.sites?.[HOST]?.layoutModes) !== JSON.stringify(prefs.sites?.[HOST]?.layoutModes)
         || next.sites?.[HOST]?.mode !== prefs.sites?.[HOST]?.mode;
+      const dockTabChanged = next.sites?.[HOST]?.dockChatTab !== prefs.sites?.[HOST]?.dockChatTab;
       const disconnectOnHideChanged = next.disconnectOnHide !== prefs.disconnectOnHide;
       const windowChanged = next.highlightWindowSec !== prefs.highlightWindowSec
         || JSON.stringify(next.highlightWindows) !== JSON.stringify(prefs.highlightWindows);
@@ -1462,6 +1470,7 @@
       if (hideChatChanged) { hideNativeAppliedKey = null; lastLayoutApplied = null; applyNativeChatDefaultOnce(); applyMode(); }
       if (disconnectOnHideChanged) applyMode(); // connect/disconnect to match the new policy if hidden
       if (modeChanged || layoutModesChanged) applyMode();
+      if (dockTabChanged) { dockChatTab = dockChatTabPref(); if (effectiveMode() === "docked") applyDockTab(); }
       if (highlightChanged) refreshHighlightState();
       if (colorChanged) applyWaveColor();
     }
@@ -1594,22 +1603,24 @@
   // 2. Focus input — reveal chat (if hidden) and put the caret in the message box.
   // Will un-hiding land us in docked mode? = the current layout's saved mode.
   function willDockOnShow() { return layoutMode() === "docked"; }
-  // Reveal half (no auto-reveal bookkeeping) — shared by the user show + the surge auto-reveal. If
-  // we land docked, also open the site's native chat (so there's a frame to dock into — it may be
-  // collapsed, esp. in fullscreen) and surface OUR Twitch tab.
+  // Reveal chat (surge auto-reveal, etc.). Keeps the persisted dock tab unless the caller set it.
   function revealChat() {
-    if (willDockOnShow()) { setNativeChat(true); dockChatTab = "twitch"; applyDockTab(); }
+    if (willDockOnShow()) { setNativeChat(true); applyDockTab(); }
     return setHidden(false);
   }
   // User opened YouTube's own chat button while docked — show both panels, YouTube tab active.
   function revealChatNative() {
     clearAutoReveal();
-    dockChatTab = "native";
+    setDockChatTab("native");
     if (willDockOnShow() && !SITE.isNativeChatOpen?.()) setNativeChat(true);
-    return setHidden(false).then(() => { if (effectiveMode() === "docked") applyDockTab(); });
+    return setHidden(false);
   }
-  // Show chat (hotkey / bubble) — an explicit user action, so it also cancels any pending auto-hide.
-  function showChat() { clearAutoReveal(); return revealChat(); }
+  // Show chat (hotkey / bubble) — selects our Twitch tab when landing docked.
+  function showChat() {
+    clearAutoReveal();
+    if (willDockOnShow()) setDockChatTab("twitch");
+    return revealChat();
+  }
   // Hide chat (× / bubble / hotkey). When docked alongside the site's chat, hiding ours also hides
   // theirs (so the video is left clean) — matching the show side that opened it.
   function hideChat() {
@@ -1625,7 +1636,11 @@
   function focusChatInput() {
     clearAutoReveal();
     const reveal = () => { root.classList.remove("meridian-idle"); bumpActivity(); focusInputEnd(); };
-    if (effectiveMode() === "hidden") revealChat().then(reveal);
+    if (effectiveMode() === "hidden") {
+      clearAutoReveal();
+      if (willDockOnShow()) setDockChatTab("twitch");
+      revealChat().then(reveal);
+    }
     else reveal();
   }
   // Blur the input and (in overlay mode) collapse the bars — same end state as Esc / the idle timer.
@@ -2857,7 +2872,7 @@
       const open = SITE.isNativeChatOpen?.();
       if (open) {
         if (siteHidden()) revealChatNative();
-        else if (dockChatTab !== "native") { dockChatTab = "native"; applyDockTab(); }
+        else setDockChatTab("native");
       } else if (!siteHidden()) {
         // User closed YouTube chat — hide ours too so docked visibility stays coupled.
         clearAutoReveal();
@@ -2904,15 +2919,12 @@
       }
     } else {
       if (!SITE.isNativeChatOpen?.()) setNativeChat(true);
-      if (docked) {
-        dockChatTab = "native";
-        if (siteHidden()) {
-          const sites = { ...(prefs.sites || {}) };
-          sites[HOST] = { ...(sites[HOST] || {}), hidden: false };
-          prefs.sites = sites;
-          savePrefs();
-          hiddenChanged = true;
-        } else applyDockTab();
+      if (docked && siteHidden()) {
+        const sites = { ...(prefs.sites || {}) };
+        sites[HOST] = { ...(sites[HOST] || {}), hidden: false };
+        prefs.sites = sites;
+        savePrefs();
+        hiddenChanged = true;
       }
     }
     return { hiddenChanged };
@@ -3026,10 +3038,20 @@
     bar.addEventListener("click", (e) => {
       const b = e.target.closest(".meridian-dock-tab");
       if (!b) return;
-      dockChatTab = b.dataset.tab;
-      applyDockTab();
+      setDockChatTab(b.dataset.tab);
     });
     return bar;
+  }
+  function setDockChatTab(tab, { persist = true } = {}) {
+    if (tab !== "native" && tab !== "twitch") return;
+    dockChatTab = tab;
+    if (persist) {
+      const sites = { ...(prefs.sites || {}) };
+      sites[HOST] = { ...(sites[HOST] || {}), dockChatTab: tab };
+      prefs.sites = sites;
+      savePrefs();
+    }
+    applyDockTab();
   }
   function applyDockTab() {
     if (!dockTabBar) return;

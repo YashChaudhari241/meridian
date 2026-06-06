@@ -102,7 +102,7 @@ const defaults = {
   ytLoadOn: "live", hideYoutubeChat: false, disconnectOnHide: false,
   markHighlightedMsgs: true, autoShowHide: false, autoShowWindowSec: 5, autoShowVisibleSec: 8,
   autoShowSurgeFactor: 3, autoShowMinRate: 4,
-  floatingReactions: true, floatingReactionPath: 100
+  floatingReactions: true, floatingReactionPath: 100, floatingReactionDurationMs: 1400
 };
 // Per-layout overlay/docked defaults — mirror content.js LAYOUT_MODE_DEFAULTS.
 const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
@@ -167,6 +167,7 @@ async function loadAllFields() {
   $("#autoShowMinRate").value = p.autoShowMinRate ?? 4;
   $("#floatingReactions").checked = p.floatingReactions !== false;
   $("#floatingReactionPath").value = p.floatingReactionPath ?? 100;
+  $("#floatingReactionDuration").value = p.floatingReactionDurationMs ?? 1400;
   $("#showViewers").checked = p.showViewers === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
   $("#extensionEnabled").checked = p.extensionEnabled !== false;
@@ -424,6 +425,12 @@ $("#saveFloatingReactionPath").addEventListener("click", async () => {
   await setPrefs({ floatingReactionPath: v });
   $("#floatingReactionPath").value = v;
   flash($("#saveFloatingReactionPath"));
+});
+$("#saveFloatingReactionDuration").addEventListener("click", async () => {
+  const v = Math.max(400, Math.min(4000, parseInt($("#floatingReactionDuration").value, 10) || 1400));
+  await setPrefs({ floatingReactionDurationMs: v });
+  $("#floatingReactionDuration").value = v;
+  flash($("#saveFloatingReactionDuration"));
 });
 $("#highlightTimeline").addEventListener("change", async (e) => {
   await setPrefs({ highlightTimeline: e.target.checked });

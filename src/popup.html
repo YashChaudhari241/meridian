@@ -163,6 +163,11 @@ word2"></textarea>
         <input id="floatingReactionPath" type="number" min="40" max="280" step="10" />
         <button id="saveFloatingReactionPath">Save</button>
       </div>
+      <label style="margin-top:10px;" title="How long each floating emote animation lasts (milliseconds)">Reaction duration (ms)</label>
+      <div class="row">
+        <input id="floatingReactionDuration" type="number" min="400" max="4000" step="100" />
+        <button id="saveFloatingReactionDuration">Save</button>
+      </div>
     </div>
     <div class="card" title="Automatically reveal the chat (while it's hidden) during a burst of activity, then hide it again. Detects a spike in messages/second relative to the recent baseline.">
       <label class="row"><span>Auto show chat on activity surges</span><input id="autoShowHide" type="checkbox" /></label>
