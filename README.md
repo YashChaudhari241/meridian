@@ -27,17 +27,23 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 
 ### Overlay & display
 - **Transparent, draggable, resizable** chat panel that you can place anywhere.
-- **Three display modes, saved per site:**
+- **Two display styles, set per YouTube layout:**
   - **Overlay** — floating panel over the video.
   - **Docked** — an opaque panel embedded inside the site's native chat frame, with a **`[Site | Twitch]` tab switcher** so you can flip between the site's chat and Twitch chat. Survives theater and fullscreen.
-  - **Auto** — overlay in fullscreen, docked otherwise.
+- **Per-layout, saved per site** — choose overlay or docked independently for **Default**, **Theater**, and **Fullscreen**. The title-bar dock button toggles the layout you're currently in; the choice sticks for next time. (Kick has Default + Fullscreen only.)
+- **Draggable show/hide bubble** — when chat is hidden, drag the bubble anywhere on screen; its position is remembered.
+- **Auto show on activity surges** (optional) — automatically reveal hidden chat during a burst of messages, then hide it again after a few seconds.
+- **Hide the native live chat by default** per layout (Site tab). In a docked layout this hides Meridian's chat too, since docked couples their visibility; closing Meridian's chat while docked also closes the site's.
 
 ### Chat
 - **Live Twitch IRC**: badges, colors, `/me` actions, and case-correct display names.
-- **Native Twitch emotes** plus **7TV / BetterTTV / FrankerFaceZ** (global **and** channel sets, each provider toggleable).
+- **Native Twitch emotes** (including first-party globals like Kappa / NotLikeThis — typeable and autocompletable) plus **7TV / BetterTTV / FrankerFaceZ** (global **and** channel sets, each provider toggleable).
 - **Emote & @-mention autocomplete** — prefix matching, Tab/Enter to complete; typed emotes become inline image chips.
+- **Message history** — press **Up / Down** in the input to recall (and edit) messages you've sent, terminal-style.
+- **Mention highlight** — messages that @-mention you get a subtle red highlight.
+- **Highlight redeemed messages** — channel-points "Highlight My Message" redemptions get a purple wash (toggleable).
 - **Chat delay** (0–600 s) to sync chat with a delayed stream.
-- **Render batching** to keep very fast channels smooth.
+- **Render batching** to keep very fast channels smooth even at hundreds of messages per second.
 - **Blocklist** (hide messages by word) and **hide-deleted-messages** (remove moderated lines instead of dimming them).
 - **Send messages** once you connect your Twitch account.
 
