@@ -13,6 +13,8 @@
   --meridian-input-h: 44px;
   --meridian-banner-h: 19px;
   --meridian-blur: 6px;
+  --meridian-text-shadow-a: 0.6;
+  --meridian-text-outline-w: 0.4px;
   --meridian-radius: 14px;
   color: #F5F5F6;
   font-family: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -22,6 +24,12 @@
   border-radius: var(--meridian-radius);
 }
 .meridian-root.meridian-hidden { display: none; }
+.meridian-root.meridian-layout-transition,
+.meridian-dock-tabs.meridian-layout-transition,
+.meridian-dock-anchor.meridian-layout-transition {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 
 /* Background — inset by the bars' heights when idle, leaving space above/below
    for the bars to "live in" while hidden. On hover it expands to fill the
@@ -49,14 +57,14 @@
 }
 .meridian-root.meridian-dragging .meridian-bg { transition: none; }
 
-/* Appearance toggles. */
-.meridian-root.no-blur .meridian-bg {
+/* Appearance toggles (overlay mode only — docked uses a fixed solid panel). */
+.meridian-root:not(.meridian-docked).no-blur .meridian-bg {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-.meridian-root.no-bg .meridian-bg { background: transparent; }
-.meridian-root.no-shadow .meridian-bg { box-shadow: none; }
-.meridian-root.no-outline .meridian-bg { border-color: transparent; }
+.meridian-root:not(.meridian-docked).no-bg .meridian-bg { background: transparent; }
+.meridian-root:not(.meridian-docked).no-shadow .meridian-bg { box-shadow: none; }
+.meridian-root:not(.meridian-docked).no-outline .meridian-bg { border-color: transparent; }
 
 /* Bars — present at full size at top:0 / bottom:0. Toggled with `visibility`
    so they don't slide, just appear/disappear as the bg expands/contracts. */
@@ -246,6 +254,7 @@
   transition: background 130ms cubic-bezier(.2,.6,.2,1), color 130ms cubic-bezier(.2,.6,.2,1);
 }
 .meridian-btn:hover { background: rgba(255,255,255,0.08); color: #F5F5F6; }
+.meridian-btn:disabled { opacity: 0.35; pointer-events: none; cursor: default; }
 
 .meridian-status {
   position: absolute;
@@ -311,6 +320,20 @@
 .meridian-conn-banner { --banner-color: 86, 168, 255; }          /* blue: connecting */
 .meridian-conn-banner.error { --banner-color: 255, 92, 92; }     /* red: error / disconnected */
 .meridian-delay-banner { --banner-color: 130, 87, 255; }         /* violet: delay buffering */
+.meridian-surge-banner { --banner-color: 255, 170, 64; }       /* amber: activity-surge auto-reveal */
+.meridian-surge-banner .meridian-banner-shimmer { display: none; }
+.meridian-banner-countdown {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: rgb(var(--banner-color));
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+  will-change: transform;
+}
 @keyframes meridian-banner-pulse {
   0%, 100% { opacity: 0.4; transform: scale(0.82); }
   50% { opacity: 1; transform: scale(1.15); box-shadow: 0 0 6px rgba(var(--banner-color), 0.9); }
@@ -421,14 +444,14 @@
 .meridian-root.text-shadow .meridian-text,
 .meridian-root.text-shadow .meridian-name,
 .meridian-root.text-shadow .meridian-msg.notice {
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, var(--meridian-text-shadow-a, 0.6));
 }
 /* Our own username is a white pill (already has a background), so it needs no shadow. */
 .meridian-root.text-shadow .meridian-msg.self .meridian-name { text-shadow: none; }
 .meridian-root.text-outline .meridian-text,
 .meridian-root.text-outline .meridian-name,
 .meridian-root.text-outline .meridian-msg.notice {
-  -webkit-text-stroke: 0.4px rgba(0, 0, 0, 0.9);
+  -webkit-text-stroke: var(--meridian-text-outline-w, 0.4px) #000;
   paint-order: stroke fill;
 }
 .meridian-root.text-bold .meridian-text { font-weight: 600; }
@@ -614,6 +637,32 @@
 }
 .meridian-toggle.show { display: inline-flex; }
 
+.meridian-float-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483600;
+  pointer-events: none;
+  overflow: hidden;
+  contain: strict;
+}
+.meridian-float-emote {
+  position: fixed;
+  object-fit: contain;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  animation: meridian-float-drift var(--fdur, 1400ms) ease-out forwards;
+}
+@keyframes meridian-float-drift {
+  from {
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1);
+    opacity: 1;
+  }
+  to {
+    transform: translate(-50%, -50%) translate3d(var(--fdx, 0), var(--fdy, 0), 0) scale(0.65);
+    opacity: 0.15;
+  }
+}
+
 .meridian-btn.active { color: #A98AFF; background: rgba(130, 87, 255, 0.16); }
 
 /* ---- Docked mode: an absolute overlay inside the site's native chat frame, with a tab bar
@@ -752,6 +801,11 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
   width: 100%;
   display: block;
   filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.35));
+  pointer-events: auto;
+}
+.meridian-wave-hit {
+  fill: transparent;
+  pointer-events: all;
 }
 /* `vector-effect` keeps the rounded crest crisp regardless of the non-uniform stretch. */
 .meridian-wave-path { vector-effect: non-scaling-stroke; }
@@ -857,6 +911,7 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
 .meridian-surge-tip-name { font-size: 12px; font-weight: 600; color: #F5F5F6; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meridian-surge-tip-time { font-size: 10.5px; color: #82828C; font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-top: 1px; }
 .meridian-surge-tip-stats { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.meridian-timeline-tip-stats { justify-content: center; }
 .meridian-surge-tip-rate { font-size: 16px; font-weight: 700; color: #F5F5F6; font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1; letter-spacing: -.02em; }
 .meridian-surge-tip-rate span { font-size: 9.5px; color: #82828C; font-weight: 500; margin-left: 2px; }
 .meridian-surge-tip-uniq { font-size: 10.5px; color: #82828C; }

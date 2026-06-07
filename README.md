@@ -31,9 +31,10 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
   - **Overlay** — floating panel over the video.
   - **Docked** — an opaque panel embedded inside the site's native chat frame, with a **`[Site | Twitch]` tab switcher** so you can flip between the site's chat and Twitch chat. Survives theater and fullscreen.
 - **Per-layout, saved per site** — choose overlay or docked independently for **Default**, **Theater**, and **Fullscreen**. The title-bar dock button toggles the layout you're currently in; the choice sticks for next time. (Kick has Default + Fullscreen only.)
+- **Smooth fullscreen switching** — entering fullscreen prepares YouTube chat for the target layout first, so overlay/hidden fullscreen modes do not briefly reserve the docked chat column.
 - **Draggable show/hide bubble** — when chat is hidden, drag the bubble anywhere on screen; its position is remembered.
 - **Auto show on activity surges** (optional) — automatically reveal hidden chat during a burst of messages, then hide it again after a few seconds.
-- **Hide the native live chat by default** per layout (Site tab). In a docked layout this hides Meridian's chat too, since docked couples their visibility; closing Meridian's chat while docked also closes the site's.
+- **Docked chat default visibility** per layout — Show or Hide on load / layout change (Site tab split pills). Meridian only opens YouTube chat when that layout is docked, and keeps docked visibility coupled with YouTube chat.
 
 ### Chat
 - **Live Twitch IRC**: badges, colors, `/me` actions, and case-correct display names.
@@ -47,8 +48,8 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 - **Blocklist** (hide messages by word) and **hide-deleted-messages** (remove moderated lines instead of dimming them).
 - **Send messages** once you connect your Twitch account.
 
-### Timeline highlights (YouTube livestreams)
-- **Chat-activity wave** — a YouTube "most-replayed"-style density wave drawn over the live seekbar, scaled to chat messages-per-second. Resolution adapts to stream length.
+### Chat intensity (YouTube livestreams)
+- **Chat intensity** — a YouTube "most-replayed"-style density wave drawn over the live seekbar, scaled to chat messages-per-second. Resolution adapts to stream length.
 - **Emote surge markers** — when enough unique viewers spam one emote in a short window, the emote is perched on the wave at that moment. **Click to seek** straight to it.
   
 ### Channels
@@ -67,4 +68,3 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 
 ### Hotkeys
 - **Toggle visibility** and **focus input**, both configurable.
-

@@ -19,6 +19,8 @@
     <button class="tab" data-tab="general">General</button>
     <button class="tab" data-tab="youtube">Site</button>
     <button class="tab" data-tab="chat">Chat</button>
+    <button class="tab" data-tab="overlays">Overlays</button>
+    <button class="tab" data-tab="timeline">Timeline</button>
     <button class="tab" data-tab="appearance">Appearance</button>
     <button class="tab" data-tab="hotkeys">Hotkeys</button>
     <button class="tab" data-tab="reset">Reset</button>
@@ -45,6 +47,7 @@
         <select id="modeTheater"><option value="overlay">Overlay</option><option value="docked">Docked</option></select></div>
       <div class="row" id="modeFullscreenRow"><span style="flex:1; font-size:13.5px; color:var(--fg-2);">Fullscreen</span>
         <select id="modeFullscreen"><option value="overlay">Overlay</option><option value="docked">Docked</option></select></div>
+      <div class="hint" id="modeFullscreenKickHint" style="display:none;">Kick fullscreen is overlay only — no chat column to dock into.</div>
     </div>
   </section>
 
@@ -55,20 +58,38 @@
       <div class="hint" id="siteHint"></div>
     </div>
     <div class="card" id="ytLoadOnCard" title="Choose whether the overlay loads on livestreams only or on every YouTube video">
-      <label>Load chat on</label>
+      <label>Enable chat for</label>
       <select id="ytLoadOn">
         <option value="live">Livestreams only</option>
         <option value="all">All videos</option>
       </select>
     </div>
-    <div class="card" id="hideYoutubeChatCard" title="Automatically collapse YouTube's own live chat by default, per layout (re-opening it manually is respected). In a docked layout this also hides Meridian's chat by default, since docked couples their visibility.">
-      <label>Hide YouTube live chat by default</label>
-      <label class="row" id="hideNativeDefaultRow"><span>Default view</span><input id="hideNativeDefault" type="checkbox" /></label>
-      <label class="row" id="hideNativeTheaterRow"><span>Theater</span><input id="hideNativeTheater" type="checkbox" /></label>
-      <label class="row" id="hideNativeFullscreenRow"><span>Fullscreen</span><input id="hideNativeFullscreen" type="checkbox" /></label>
+    <div class="card" id="hideYoutubeChatCard" title="Whether YouTube's live chat starts open or collapsed for each layout (only applied on page load or when you switch layouts). In docked mode Meridian stays coupled with YouTube chat.">
+      <label>Docked chat default visibility</label>
+      <div class="row native-chat-row" id="hideNativeDefaultRow">
+        <span class="native-chat-label">Default view</span>
+        <div class="split-pill" data-layout="default">
+          <button type="button" class="split-pill-btn" data-val="show">Show</button>
+          <button type="button" class="split-pill-btn" data-val="hide">Hide</button>
+        </div>
+      </div>
+      <div class="row native-chat-row" id="hideNativeTheaterRow">
+        <span class="native-chat-label">Theater</span>
+        <div class="split-pill" data-layout="theater">
+          <button type="button" class="split-pill-btn" data-val="show">Show</button>
+          <button type="button" class="split-pill-btn" data-val="hide">Hide</button>
+        </div>
+      </div>
+      <div class="row native-chat-row" id="hideNativeFullscreenRow">
+        <span class="native-chat-label">Fullscreen</span>
+        <div class="split-pill" data-layout="fullscreen">
+          <button type="button" class="split-pill-btn" data-val="show">Show</button>
+          <button type="button" class="split-pill-btn" data-val="hide">Hide</button>
+        </div>
+      </div>
     </div>
     <div class="card" title="Keep the overlay inside the player, following theater and fullscreen">
-      <label class="row"><span>Bind overlay to the video player</span><input id="boundToPlayer" type="checkbox" /></label>
+      <label class="row"><span>Anchor to player</span><input id="boundToPlayer" type="checkbox" /></label>
     </div>
     <div class="card" id="ytMappingsCard" title="Map this page's YouTube handle to a Twitch channel, joined automatically">
       <label>YouTube → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
@@ -107,15 +128,95 @@
       </div>
     </div>
     <div class="card" title="Maximum messages kept in the chat view">
-      <label>Max messages kept in view</label>
+      <label>Chat History Limit</label>
       <div class="row">
         <input id="maxMessages" type="number" min="50" max="2000" step="50" />
         <button id="saveMaxMessages">Save</button>
       </div>
     </div>
+    <div class="card" title="When you hide the chat, also disconnect from Twitch. Off (default): hiding is visual only — emotes, highlights and the timeline keep processing in the background.">
+      <label class="row"><span>Disconnect on Hide</span><input id="disconnectOnHide" type="checkbox" /></label>
+    </div>
+    <div class="card" title="Visually mark channel-points &quot;Highlight My Message&quot; redemptions with a purple wash">
+      <label class="row"><span>Highlight redeemed messages</span><input id="markHighlightedMsgs" type="checkbox" /></label>
+    </div>
+    <div class="card" title="Remove moderated messages instead of dimming them">
+      <label class="row"><span>Hide deleted messages</span><input id="hideDeleted" type="checkbox" /></label>
+    </div>
+    <div class="card" title="Hide messages containing any of these words">
+      <label>Blocked words (one per line, case-insensitive)</label>
+      <textarea id="blockedWords" rows="6" spellcheck="false" placeholder="word1
+word2"></textarea>
+      <button id="saveBlockedWords">Save</button>
+      <span id="blockedWordsMsg" class="hint"></span>
+    </div>
+  </section>
+
+  <!-- Overlays -->
+  <section class="panel" data-tab="overlays">
+    <div class="card" title="Show the channel's live Twitch viewer count in a pill on the overlay. Requires connecting your Twitch account; updates about once a minute.">
+      <label class="row"><span>Live viewer count (requires Twitch sign-in)</span><input id="showViewers" type="checkbox" /></label>
+    </div>
+    <div class="card" title="While chat is hidden, emotes from incoming messages float out of the show-chat bubble">
+      <label class="row"><span>Floating reactions</span><input id="floatingReactions" type="checkbox" /></label>
+      <label style="margin-top:10px;" title="Emote max-height at a 1080p reference viewport; width follows the image aspect ratio; scales on larger screens">Emote size (px at 1080p)</label>
+      <div class="row">
+        <input id="floatingReactionSize" type="number" min="14" max="112" step="2" />
+        <button id="saveFloatingReactionSize">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Radial = random directions; Video center = drift toward the player center with ±45° variation">Float direction</label>
+      <div class="row">
+        <div class="split-pill" id="floatingReactionDirectionPill">
+          <button type="button" class="split-pill-btn" data-val="radial">Radial</button>
+          <button type="button" class="split-pill-btn active" data-val="center">Video center</button>
+        </div>
+      </div>
+      <label style="margin-top:10px;" title="Travel distance at a 1080p reference viewport; scales with screen size">Reaction path length (px at 1080p)</label>
+      <div class="row">
+        <input id="floatingReactionPath" type="number" min="40" max="500" step="10" />
+        <button id="saveFloatingReactionPath">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="How long each floating emote animation lasts (milliseconds)">Reaction duration (ms)</label>
+      <div class="row">
+        <input id="floatingReactionDuration" type="number" min="400" max="4000" step="100" />
+        <button id="saveFloatingReactionDuration">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Wait this long after the bubble appears before emotes start floating (avoids lag right after hiding chat)">Start delay (ms)</label>
+      <div class="row">
+        <input id="floatingReactionStartDelay" type="number" min="0" max="10000" step="100" />
+        <button id="saveFloatingReactionStartDelay">Save</button>
+      </div>
+    </div>
+    <div class="card" title="Automatically reveal the chat (while it's hidden) during a burst of activity, then hide it again. Detects a spike in messages/second relative to the recent baseline.">
+      <label class="row"><span>Auto show chat on activity surges</span><input id="autoShowHide" type="checkbox" /></label>
+      <label style="margin-top:10px;" title="Length of the rolling window the surge rate is measured over">Surge window (seconds)</label>
+      <div class="row">
+        <input id="autoShowWindow" type="number" min="1" max="60" step="1" />
+        <button id="saveAutoShowWindow">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Messages/sec must exceed the recent baseline multiplied by this factor to trigger a reveal">Surge threshold multiplier</label>
+      <div class="row">
+        <input id="autoShowSurgeFactor" type="number" min="1.1" max="20" step="0.1" />
+        <button id="saveAutoShowSurgeFactor">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Absolute minimum messages/sec required even when the baseline is near zero">Minimum surge rate (msgs/sec)</label>
+      <div class="row">
+        <input id="autoShowMinRate" type="number" min="1" max="100" step="1" />
+        <button id="saveAutoShowMinRate">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="How long the auto-revealed chat stays visible before hiding again">Stay visible for (seconds)</label>
+      <div class="row">
+        <input id="autoShowVisible" type="number" min="1" max="120" step="1" />
+        <button id="saveAutoShowVisible">Save</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Timeline -->
+  <section class="panel" data-tab="timeline">
     <div class="card">
       <label class="row" title="Show a chat activity wave over the live seekbar on YouTube livestreams">
-        <span>Highlight timeline (chat-activity wave)</span>
+        <span>Show chat intensity on timeline</span>
         <input id="highlightTimeline" type="checkbox" />
       </label>
       <label class="row" title="Mark emote surges on the seekbar (works with or without the wave). Click one to jump to that moment">
@@ -127,7 +228,7 @@
         <input id="highlightColor" type="color" />
       </label>
       <label class="row" title="Keep emote surge markers for this video and replay them on the VOD after the stream ends (matched by the video's URL)">
-        <span>Retain emote highlights</span>
+        <span>Save Emote Highlights</span>
         <input id="highlightPersistEmotes" type="checkbox" />
       </label>
       <label class="row" title="Keep the chat-intensity wave for this video and replay it on the VOD after the stream ends (matched by the video's URL)">
@@ -159,44 +260,12 @@
         <span>Anchor highlights to the live edge</span>
         <input id="highlightAnchorLive" type="checkbox" />
       </label>
-      <label style="margin-top:10px;" title="Shift the wave and markers this many seconds into the past for reaction time">Highlight timeline offset (seconds)</label>
+      <label style="margin-top:10px;" title="Shift the wave and markers this many seconds into the past for reaction time">Chat intensity timeline offset (seconds)</label>
       <div class="row" title="Shift the wave and markers this many seconds into the past for reaction time">
         <input id="highlightOffset" type="number" min="0" max="120" step="1" />
         <button id="saveHighlightOffset">Save</button>
       </div>
     </details>
-    <div class="card" title="Show the channel's live Twitch viewer count in a pill on the overlay. Requires connecting your Twitch account; updates about once a minute.">
-      <label class="row"><span>Live viewer count (requires Twitch sign-in)</span><input id="showViewers" type="checkbox" /></label>
-    </div>
-    <div class="card" title="When you hide the chat, also disconnect from Twitch. Off (default): hiding is visual only — emotes, highlights and the timeline keep processing in the background.">
-      <label class="row"><span>Disconnect chat on hide</span><input id="disconnectOnHide" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Automatically reveal the chat (while it's hidden) during a burst of activity, then hide it again. Detects a spike in messages/second relative to the recent baseline.">
-      <label class="row"><span>Auto show chat on activity surges</span><input id="autoShowHide" type="checkbox" /></label>
-      <label style="margin-top:10px;" title="Length of the rolling window the surge rate is measured over">Surge window (seconds)</label>
-      <div class="row">
-        <input id="autoShowWindow" type="number" min="1" max="60" step="1" />
-        <button id="saveAutoShowWindow">Save</button>
-      </div>
-      <label style="margin-top:10px;" title="How long the auto-revealed chat stays visible before hiding again">Stay visible for (seconds)</label>
-      <div class="row">
-        <input id="autoShowVisible" type="number" min="1" max="120" step="1" />
-        <button id="saveAutoShowVisible">Save</button>
-      </div>
-    </div>
-    <div class="card" title="Visually mark channel-points &quot;Highlight My Message&quot; redemptions with a purple wash">
-      <label class="row"><span>Highlight redeemed messages</span><input id="markHighlightedMsgs" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Remove moderated messages instead of dimming them">
-      <label class="row"><span>Hide deleted messages</span><input id="hideDeleted" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Hide messages containing any of these words">
-      <label>Blocked words (one per line, case-insensitive)</label>
-      <textarea id="blockedWords" rows="6" spellcheck="false" placeholder="word1
-word2"></textarea>
-      <button id="saveBlockedWords">Save</button>
-      <span id="blockedWordsMsg" class="hint"></span>
-    </div>
   </section>
 
   <!-- Appearance -->
@@ -208,35 +277,38 @@ word2"></textarea>
         <input id="highlightColorAppearance" type="color" />
       </div>
     </div>
-    <div class="card">
+    <div class="card" title="Overlay mode only — docked chat uses a fixed solid panel">
+      <label style="font-size:12px;color:var(--fg-2);margin-bottom:8px;display:block;">Background (overlay only)</label>
       <label class="row" title="Show a translucent background behind chat"><span>Background color</span><input id="bgEnabled" type="checkbox" /></label>
       <label class="row" title="Blur the video behind the chat background"><span>Background blur</span><input id="blurEnabled" type="checkbox" /></label>
       <label class="row" title="Cast a drop shadow under the chat panel"><span>Drop shadow (panel)</span><input id="shadowEnabled" type="checkbox" /></label>
       <label class="row" title="Draw a thin border around the chat panel"><span>Background outline</span><input id="outlineEnabled" type="checkbox" /></label>
-    </div>
-    <div class="card">
-      <label title="Add a drop shadow or outline to chat text for legibility over bright video">Text style</label>
-      <select id="textStyle" title="Add a drop shadow or outline to chat text for legibility over bright video">
-        <option value="none">None</option>
-        <option value="shadow">Drop shadow</option>
-        <option value="outline">Outline</option>
-      </select>
-      <label class="row"><span>Bold text</span><input id="boldText" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Opacity of the chat background">
-      <div class="sliderhead"><label style="width:auto;">Background opacity</label><span class="val" id="opacityVal"></span></div>
+      <div class="sliderhead" style="margin-top:10px;"><label style="width:auto;">Background opacity</label><span class="val" id="opacityVal"></span></div>
       <input id="opacity" type="range" min="0" max="100" step="1" />
-    </div>
-    <div class="card" title="Strength of the background blur in pixels">
-      <div class="sliderhead"><label style="width:auto;">Background blur radius</label><span class="val" id="blurRadiusVal"></span></div>
+      <div class="sliderhead" style="margin-top:10px;"><label style="width:auto;">Background blur radius</label><span class="val" id="blurRadiusVal"></span></div>
       <input id="blurRadius" type="range" min="0" max="20" step="1" />
     </div>
-    <div class="card" title="Chat text size in pixels">
+    <div class="card" title="Applies in overlay and docked mode">
+      <label style="font-size:12px;color:var(--fg-2);margin-bottom:8px;display:block;">Text (overlay + docked)</label>
       <label>Font size (px)</label>
       <div class="row">
         <input id="fontSize" type="number" min="10" max="24" step="1" />
         <button id="saveFontSize">Save</button>
       </div>
+      <label class="row" style="margin-top:10px;"><span>Text drop shadow</span><input id="textShadowEnabled" type="checkbox" /></label>
+      <div id="textShadowRow">
+        <div class="sliderhead" style="margin-top:10px;"><label style="width:auto;">Shadow intensity</label><span class="val" id="textShadowIntensityVal"></span></div>
+        <input id="textShadowIntensity" type="range" min="0" max="100" step="1" />
+      </div>
+      <label class="row" style="margin-top:10px;"><span>Text outline</span><input id="textOutlineEnabled" type="checkbox" /></label>
+      <div id="textOutlineRow">
+        <label style="margin-top:10px;" title="Black outline thickness around chat text">Outline thickness (px)</label>
+        <div class="row">
+          <input id="textOutlineWidth" type="number" min="0.1" max="2" step="0.1" />
+          <button id="saveTextOutlineWidth">Save</button>
+        </div>
+      </div>
+      <label class="row" style="margin-top:10px;"><span>Bold text</span><input id="boldText" type="checkbox" /></label>
     </div>
   </section>
 
@@ -305,7 +377,7 @@ word2"></textarea>
       </div>
     </div>
     <div class="card" title="Delete the saved chat-intensity wave for every video/channel">
-      <label>Stored highlight timeline</label>
+      <label>Stored chat intensity</label>
       <div class="hint">Delete the saved chat-intensity wave (replayed on VODs).</div>
       <div class="row">
         <button id="resetDensity" class="secondary">Clear timeline data</button>
