@@ -6,6 +6,9 @@ const PREFS_KEY = "meridian.prefs";
 const UI_KEY = "meridian.ui";
 
 function send(type, extra = {}) { return chrome.runtime.sendMessage({ type, ...extra }); }
+function timeout(ms, value = null) {
+  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+}
 // Paint the accent-filled portion of a range slider (driven by CSS var --pct).
 function setRangeFill(el) {
   const min = +el.min || 0, max = +el.max || 100;
@@ -186,7 +189,10 @@ async function loadAllFields() {
   let liveChannel = "";
   try {
     if (activeTab?.id) {
-      const r = await chrome.tabs.sendMessage(activeTab.id, { type: "GET_ACTIVE_CHANNEL" });
+      const r = await Promise.race([
+        chrome.tabs.sendMessage(activeTab.id, { type: "GET_ACTIVE_CHANNEL" }).catch(() => null),
+        timeout(250)
+      ]);
       liveChannel = (r?.channel || "").toLowerCase();
     }
   } catch { /* no content script on this tab (e.g. not YouTube/Kick) */ }

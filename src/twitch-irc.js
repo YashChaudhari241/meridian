@@ -19,16 +19,19 @@ export class TwitchIRC {
     this.reconnectDelay = 1000;
     this.shouldRun = false;
     this.pingTimer = null;
+    this.reconnectTimer = null;
   }
 
   connect() {
     this.shouldRun = true;
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     this._open();
   }
 
   disconnect() {
     this.shouldRun = false;
     this._clearPing();
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.ws) {
       try { this.ws.close(); } catch {}
       this.ws = null;
@@ -73,6 +76,7 @@ export class TwitchIRC {
   }
 
   _open() {
+    if (!this.shouldRun) return;
     this.onStatus({ state: "connecting" });
     const ws = new WebSocket(this.url);
     this.ws = ws;
@@ -94,11 +98,15 @@ export class TwitchIRC {
 
     ws.onclose = () => {
       this._clearPing();
+      if (this.ws === ws) this.ws = null;
+      if (!this.shouldRun) return;
       this.onStatus({ state: "disconnected" });
-      if (this.shouldRun) {
-        setTimeout(() => this._open(), this.reconnectDelay);
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
-      }
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this._open();
+      }, this.reconnectDelay);
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
     };
 
     ws.onerror = () => this.onStatus({ state: "error" });

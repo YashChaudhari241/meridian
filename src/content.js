@@ -59,6 +59,8 @@
         domMsgs: els?.messages?.childElementCount || 0,
         buffer: renderBuffer?.length || 0, queue: queue?.length || 0,
         highlights: highlights?.size || 0, markers: emoteMarkers?.length || 0,
+        densityBuckets: density?.size || 0,
+        chatters: chatters?.size || 0,
       };
     },
   };
@@ -354,6 +356,10 @@
   let dockLayoutObs = null;     // reacts to theater/hide-chat toggles so the layout updates instantly
   let sizeDebTimer = null;      // trailing debounce so load-time attribute flapping doesn't thrash layout
   let repinRaf = 0;             // rAF guard for re-pinning the theater-fixed chat on scroll
+  let layoutQuietUntil = 0;     // short grace period after fullscreen/theater transitions
+  let layoutQuietTimer = null;
+  let pendingModeTimer = null;
+  let renderQuietTimer = null;
   // Declared up here (not next to the dock helpers) because dock()/sizeDockAnchor() can run during
   // setup — a `const` lower in the file would be in its temporal dead zone and throw, aborting init.
   const THEATER_CHAT_W = 402;   // YouTube's default live-chat column width
@@ -1181,9 +1187,36 @@
   // --- delay queue + update-frequency batching ---
   const queue = [];
   const renderBuffer = [];
+  const DELAY_QUEUE_CAP = 10000; // 10 msg/s × 600 s fits; beyond this would be stale flood backlog
   let pumpTimer = null;
   let renderTimer = null;
   let renderRaf = 0;
+  function layoutTransitionActive() { return Date.now() < layoutQuietUntil; }
+  function layoutQuietDelay(extra = 0) { return Math.max(0, layoutQuietUntil - Date.now()) + extra; }
+  function setLayoutSuspended(on) {
+    root.classList.toggle("meridian-layout-transition", !!on);
+    dockTabBar?.classList.toggle("meridian-layout-transition", !!on);
+  }
+  function beginLayoutQuiet(ms = 800) {
+    layoutQuietUntil = Math.max(layoutQuietUntil, Date.now() + ms);
+    setLayoutSuspended(true);
+    if (layoutQuietTimer) clearTimeout(layoutQuietTimer);
+    layoutQuietTimer = setTimeout(() => {
+      layoutQuietTimer = null;
+      setLayoutSuspended(false);
+      if (renderBuffer.length) scheduleRenderFlush();
+      if (emoteRegroupDirty) scheduleEmoteRender();
+    }, layoutQuietDelay(32));
+  }
+  function scheduleDeferredModeApply(extra = 0) {
+    if (pendingModeTimer) clearTimeout(pendingModeTimer);
+    pendingModeTimer = setTimeout(() => {
+      pendingModeTimer = null;
+      applyMode();
+      refreshFloatOrigin();
+      if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
+    }, layoutQuietDelay(extra));
+  }
 
   function enqueue(m) {
     if (m.type === "roomstate") {
@@ -1208,6 +1241,12 @@
     if (m.type === "msg" && !m.self && isBlocked(m.text)) return;
     if (m.self || (prefs.chatDelaySec || 0) <= 0) { scheduleRender(m); return; }
     queue.push(m);
+    if (queue.length > DELAY_QUEUE_CAP) {
+      const drop = queue.length - DELAY_QUEUE_CAP;
+      queue.splice(0, drop);
+      delayPrimed = true;
+      if (PERF.on) PERF.dropped += drop;
+    }
     schedulePump();
     updateDelayBanner();
   }
@@ -1340,6 +1379,16 @@
       renderBuffer.splice(0, drop);
       if (PERF.on) PERF.dropped += drop;
     }
+    scheduleRenderFlush();
+  }
+
+  function scheduleRenderFlush() {
+    if (layoutTransitionActive()) {
+      if (!renderQuietTimer) {
+        renderQuietTimer = setTimeout(() => { renderQuietTimer = null; scheduleRenderFlush(); }, layoutQuietDelay(16));
+      }
+      return;
+    }
     const freq = prefs.updateFrequencyMs | 0;
     if (freq > 0) { if (!renderTimer) renderTimer = setTimeout(flushRenderBuffer, freq); }
     else if (!renderRaf) renderRaf = requestAnimationFrame(flushRenderBuffer);
@@ -1463,6 +1512,7 @@
     renderBuffer.length = 0;
     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
     if (renderRaf) { cancelAnimationFrame(renderRaf); renderRaf = 0; }
+    if (renderQuietTimer) { clearTimeout(renderQuietTimer); renderQuietTimer = null; }
     if (pumpTimer) { clearTimeout(pumpTimer); pumpTimer = null; }
     delayPrimed = false;          // re-arm the buffering indicator for the next connection
     updateDelayBanner();
@@ -1646,7 +1696,11 @@
     } else updateChannelInputFromPrefs();
     // A layout transition (default ⇄ theater) can change the mode and/or trigger the per-layout
     // hide-native default even when effectiveMode is unchanged — re-dispatch on any layout change.
-    if (currentLayout() !== lastLayoutApplied) { applyMode(); return; }
+    if (currentLayout() !== lastLayoutApplied) {
+      if (layoutTransitionActive()) scheduleDeferredModeApply(80);
+      else applyMode();
+      return;
+    }
     // Effective mode can also flip on its own, so re-run the dispatcher when it differs.
     const em = effectiveMode();
     if (em !== appliedMode) { applyMode(); return; }
@@ -1680,6 +1734,15 @@
 
   // Re-home the overlay when entering/leaving fullscreen so it stays visible inside the
   // fullscreen element (fixes the Kick overlay vanishing in fullscreen).
+  document.addEventListener("pointerdown", (e) => {
+    if (e.target?.closest?.(".ytp-fullscreen-button")) beginLayoutQuiet(1000);
+  }, { capture: true, passive: true });
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (String(e.key || "").toLowerCase() !== "f") return;
+    if (e.target?.closest?.("input,textarea,[contenteditable='true'],.meridian-root")) return;
+    if (pageActive) beginLayoutQuiet(1000);
+  }, { capture: true });
   ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) =>
     document.addEventListener(ev, () => {
       // If we just dropped out of fullscreen because of an in-input Esc, re-enter (keeps the
@@ -1689,19 +1752,12 @@
         (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => {});
         return;
       }
-      // Our re-layout (dock/undock + player resize nudge) is deferred a frame so it runs AFTER the
-      // browser's fullscreen transition instead of competing with it — keeps the toggle smoother.
-      requestAnimationFrame(() => {
-        pauseFloatingReactions();
-        // The seekbar resizes with fullscreen → FP changes → regroup the emote markers promptly
-        // (the 2 s loop would catch the width change too, just up to 2 s later).
-        markEmotesDirty(); scheduleEmoteRender();
-        // Fullscreen is its own layout, so effectiveMode() flips on every fullscreen transition —
-        // re-dispatch to apply that layout's saved overlay/docked (and its hide-native default).
-        applyMode();
-        refreshFloatOrigin();
-        if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
-      });
+      // Let YouTube complete the fullscreen transition before Meridian does any re-homing,
+      // docking, seekbar reads, or chat DOM commits. This keeps us off the critical path.
+      beginLayoutQuiet(900);
+      pauseFloatingReactions();
+      markEmotesDirty();
+      scheduleDeferredModeApply(120);
     })
   );
   // Window resize also changes the seekbar width → regroup the emote markers (debounced via rAF).
@@ -1713,6 +1769,7 @@
   // overlay (never hides one the user has up) and any manual interaction cancels the pending re-hide
   // ("return to prior state"). Site-agnostic + independent of the YouTube-live density wave.
   let rateStamps = [];       // arrival ts of recent 'msg's, trimmed to the window each tick
+  let rateHead = 0;          // avoids Array.shift() churn during long high-volume sessions
   let baselineRate = 0;      // EMA of per-second msg rate (auto-calibrating)
   let autoHideTimer = null;
   function autoShowWindowMs() { return Math.max(1, Math.min(60, prefs.autoShowWindowSec | 0 || 4)) * 1000; }
@@ -1730,11 +1787,15 @@
     clearAutoReveal();
   }
   setInterval(() => {
-    if (!prefs.autoShowHide) { if (rateStamps.length) rateStamps.length = 0; return; }
+    if (!prefs.autoShowHide) { if (rateStamps.length) rateStamps.length = 0; rateHead = 0; return; }
     const now = Date.now();
     const win = autoShowWindowMs();
-    while (rateStamps.length && rateStamps[0] < now - win) rateStamps.shift();
-    const rate = rateStamps.length / (win / 1000);            // msgs/sec over the window
+    while (rateHead < rateStamps.length && rateStamps[rateHead] < now - win) rateHead++;
+    if (rateHead > 512 || rateHead > rateStamps.length / 2) {
+      rateStamps = rateStamps.slice(rateHead);
+      rateHead = 0;
+    }
+    const rate = (rateStamps.length - rateHead) / (win / 1000); // msgs/sec over the window
     const minRate = Math.max(1, prefs.autoShowMinRate | 0 || 3);
     const factor = Math.max(1.1, prefs.autoShowSurgeFactor || 2);
     const surge = rate >= Math.max(baselineRate * factor, minRate);
@@ -2024,13 +2085,22 @@
   // while the cheap per-tick position pass just slides the existing DOM along the scrolling seekbar.
   let emoteMarkers = [];
   let emoteRegroupDirty = true, emoteLastBarW = 0, emoteLastRegroupAt = 0, emoteBox = null;
-  let emoteRenderQueued = false;
+  let emoteRenderQueued = false, emoteRenderDelayTimer = null;
   const EMOTE_REGROUP_MS = 30000;
   function markEmotesDirty() { emoteRegroupDirty = true; }
   // rAF-debounced render so a burst of surges arriving in quick succession coalesces into ONE
   // regroup+reposition instead of one per surge (the 2 s loop also drives renderEmotes directly).
   function scheduleEmoteRender() {
     if (emoteRenderQueued) return;
+    if (layoutTransitionActive()) {
+      if (!emoteRenderDelayTimer) {
+        emoteRenderDelayTimer = setTimeout(() => {
+          emoteRenderDelayTimer = null;
+          scheduleEmoteRender();
+        }, layoutQuietDelay(16));
+      }
+      return;
+    }
     emoteRenderQueued = true;
     requestAnimationFrame(() => { emoteRenderQueued = false; renderEmotes(); });
   }
@@ -2052,7 +2122,9 @@
   let highlightsKey = "";
   let saveHlTimer = null;
   let densityKey = "";
-  let saveDensityTimer = null;
+  let saveDensityTimer = null, densityDirty = false, lastDensityPruneAt = 0;
+  const DENSITY_SAVE_MS = 60000;
+  const DENSITY_PRUNE_MS = 60000;
   // Refreshed by the 2 s render loop so the per-message hot path needs no DOM access.
   let densityArmed = false;
   let atLiveCached = true; // whether playback is at/near the live edge (refreshed by the 2 s loop)
@@ -2136,6 +2208,7 @@
     // by the 2 s loop). On reload the loop may lag behind the first messages, so prime once when
     // needed. `recordingActive()` is checked live (not the cached `densityArmed`) so a late live
     // signal doesn't drop the opening burst.
+    if (layoutTransitionActive()) return;
     if (m.self || !recordingActive()) return;
     if (liveEdgeVt <= 0) {
       const s = videoSeekable();
@@ -2148,7 +2221,10 @@
     if (!atLiveCached || liveEdgeVt <= 0) return;
     // Only feed the density wave when the timeline is on; the emote engine still ingests below so
     // emote markers work even with the wave off.
-    if (prefs.highlightTimeline) density.add(liveEdgeVt + (Date.now() - liveEdgeAt) / 1000, 1);
+    if (prefs.highlightTimeline) {
+      density.add(liveEdgeVt + (Date.now() - liveEdgeAt) / 1000, 1);
+      densityDirty = true;
+    }
     if (!prefs.highlightEnabled) return;
     const user = (m.user || "").toLowerCase();
     const seen = new Set();
@@ -2679,14 +2755,27 @@
     return id ? `meridian.density.${HOST}.${id}` : "";
   }
   function scheduleSaveDensity() {
-    if (saveDensityTimer || !prefs.highlightPersistDensity) return;
-    saveDensityTimer = setTimeout(saveDensity, 4000);
+    if (saveDensityTimer || !prefs.highlightPersistDensity || !densityDirty) return;
+    saveDensityTimer = setTimeout(saveDensity, DENSITY_SAVE_MS);
   }
   async function saveDensity() {
     saveDensityTimer = null;
-    if (!densityKey || !prefs.highlightPersistDensity || !density.size) return;
-    try { await chrome.storage.local.set({ [densityKey]: density.serialize() }); } catch {}
+    if (layoutTransitionActive()) {
+      if (densityDirty) saveDensityTimer = setTimeout(saveDensity, layoutQuietDelay(500));
+      return;
+    }
+    if (!densityKey || !prefs.highlightPersistDensity || !density.size || !densityDirty) return;
+    densityDirty = false;
+    try { await chrome.storage.local.set({ [densityKey]: density.serialize() }); }
+    catch { densityDirty = true; }
   }
+  function flushDensitySoon() {
+    if (!densityDirty || !prefs.highlightPersistDensity || !densityKey || !density.size) return;
+    if (saveDensityTimer) { clearTimeout(saveDensityTimer); saveDensityTimer = null; }
+    saveDensity();
+  }
+  window.addEventListener("pagehide", flushDensitySoon);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) flushDensitySoon(); });
   async function loadHighlights() {
     const key = hlStorageKey();
     if (!key || key === highlightsKey) return;
@@ -2697,6 +2786,7 @@
     // New stream/video — drop the previous stream's density wave so nothing carries over
     // (a channel can run several livestreams; each has a distinct videoId/key).
     density.reset();
+    densityDirty = false;
     replayLoaded = false;
     const live = isLiveStream();
     // Bail only when the wave is entirely off (timeline pref or unsupported site). On a VOD we must
@@ -2741,6 +2831,7 @@
   // channel-logo / like-dislike overlays clear of the wave + emotes.
   function markWaveOnPlayer(show) { SITE.findPlayer?.()?.classList.toggle("meridian-has-wave", !!show); }
   setInterval(() => {
+    if (layoutTransitionActive()) { densityArmed = false; return; }
     // `densityArmed` gates the per-message RECORDING hot path (live only); the wave can still be
     // DISPLAYED in replay on a finished VOD.
     densityArmed = recordingActive();
@@ -2759,7 +2850,10 @@
     // so it can be replayed on the VOD; otherwise just the renderable window.
     if (densityArmed && prefs.highlightTimeline) {
       const keepSec = prefs.highlightPersistDensity ? 12 * 3600 : Math.max(waveWindow(s), 600) + highlightOffset();
-      density.pruneBefore(s.end - keepSec);
+      if (now - lastDensityPruneAt >= DENSITY_PRUNE_MS) {
+        lastDensityPruneAt = now;
+        density.pruneBefore(s.end - keepSec);
+      }
       scheduleSaveDensity();
     }
     recomputeResIfDue(now, s);
@@ -2940,8 +3034,17 @@
   }
 
   function pruneOldMessages() {
-    const max = prefs.maxMessages || 300;
+    pruneMessagesTo(prefs.maxMessages || 300);
+  }
+
+  function pruneMessagesTo(max) {
     while (els.messages.childElementCount > max) els.messages.firstElementChild.remove();
+  }
+
+  function pruneBeforeModeSwitch() {
+    const max = prefs.maxMessages || 300;
+    const cap = Math.min(max, 600);
+    if (els.messages.childElementCount > cap) pruneMessagesTo(cap);
   }
 
   function setStatus(s) { els.status.textContent = s || ""; }
@@ -3094,7 +3197,12 @@
     if (!wf || wf === layoutObsTarget) return;
     if (layoutObs) layoutObs.disconnect();
     layoutObsTarget = wf;
-    layoutObs = new MutationObserver(() => { if (currentLayout() !== lastLayoutApplied) applyMode(); });
+    layoutObs = new MutationObserver(() => {
+      if (currentLayout() !== lastLayoutApplied) {
+        beginLayoutQuiet(500);
+        scheduleDeferredModeApply(80);
+      }
+    });
     layoutObs.observe(wf, { attributes: true, attributeFilter: ["theater"] });
   }
 
@@ -3197,6 +3305,10 @@
     return pageActive && !(effectiveMode() === "hidden" && prefs.disconnectOnHide === true);
   }
   function applyMode() {
+    if (layoutTransitionActive()) { scheduleDeferredModeApply(0); return; }
+    if (pageActive && (currentLayout() !== lastLayoutApplied || effectiveMode() !== appliedMode)) {
+      pruneBeforeModeSwitch();
+    }
     applyLayoutDefaults(); // may flip the hidden flag on a layout transition (read by applyModeVisual)
     applyModeVisual();
     if (shouldConnect()) { if (!irc) ensureConnected(); }
@@ -3229,6 +3341,7 @@
   function buildDockTabs() {
     const bar = document.createElement("div");
     bar.className = "meridian-dock-tabs";
+    if (layoutTransitionActive()) bar.classList.add("meridian-layout-transition");
     // Source-badge tabs: a colored dot per source (the site's brand color + Twitch violet) with an
     // accent underline on the active one, so it reads as "which chat am I looking at".
     const mkTab = (tab, label, color) => {
@@ -3327,7 +3440,9 @@
   // Nudge the player to recompute the video size after we change the reserved width. Deferred so it
   // never fires inside dock()/sizeDockAnchor()'s call stack (a synchronous re-layout there could
   // re-home our panel mid-mount).
-  function nudgePlayerResize() { setTimeout(() => window.dispatchEvent(new Event("resize")), 0); }
+  function nudgePlayerResize() {
+    setTimeout(() => window.dispatchEvent(new Event("resize")), layoutTransitionActive() ? layoutQuietDelay(16) : 0);
+  }
   // Watch the layout signals that flip our docked sizing (theater on/off, native chat hide/show)
   // so we re-run sizeDockAnchor the instant they change instead of waiting for the 2 s poll. Safe
   // from feedback loops: we only toggle inline position/padding, never these attributes.
@@ -3346,7 +3461,8 @@
   // "collapsed" while the chat frame is still loading).
   function scheduleSizeDock() {
     if (sizeDebTimer) clearTimeout(sizeDebTimer);
-    sizeDebTimer = setTimeout(() => { sizeDebTimer = null; sizeDockAnchor(); }, 200);
+    const delay = layoutTransitionActive() ? layoutQuietDelay(80) : 200;
+    sizeDebTimer = setTimeout(() => { sizeDebTimer = null; sizeDockAnchor(); }, delay);
   }
   // While the theater-with-chat-hidden chat is pinned position:fixed, the YouTube player scrolls
   // with the page but our fixed panel doesn't — so it drifts until the 2 s poll re-pins it. Re-pin
@@ -3376,6 +3492,7 @@
     }
   }
   function sizeDockAnchor() {
+    if (layoutTransitionActive()) { scheduleSizeDock(); return; }
     const a = dockAnchor;
     if (!a) return;
     const collapsed = a.hasAttribute("collapsed") || a.hasAttribute("hide-chat-frame");

@@ -24,6 +24,11 @@
   border-radius: var(--meridian-radius);
 }
 .meridian-root.meridian-hidden { display: none; }
+.meridian-root.meridian-layout-transition,
+.meridian-dock-tabs.meridian-layout-transition {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 
 /* Background — inset by the bars' heights when idle, leaving space above/below
    for the bars to "live in" while hidden. On hover it expands to fill the
