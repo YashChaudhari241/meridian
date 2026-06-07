@@ -25,7 +25,8 @@
 }
 .meridian-root.meridian-hidden { display: none; }
 .meridian-root.meridian-layout-transition,
-.meridian-dock-tabs.meridian-layout-transition {
+.meridian-dock-tabs.meridian-layout-transition,
+.meridian-dock-anchor.meridian-layout-transition {
   visibility: hidden !important;
   pointer-events: none !important;
 }

@@ -204,17 +204,22 @@
     nativeChatExists: () => !!document.querySelector("ytd-live-chat-frame#chat"),
     isNativeChatOpen() {
       const f = document.querySelector("ytd-live-chat-frame#chat");
-      return !!f && !f.hasAttribute("collapsed");
+      return !!f && !f.hasAttribute("collapsed") && !f.hasAttribute("hide-chat-frame");
     },
-    setNativeChatOpen(open) {
+    setNativeChatOpen(open, opts = {}) {
       const f = document.querySelector("ytd-live-chat-frame#chat");
       if (!f) return false;
-      if (!f.hasAttribute("collapsed") === !!open) return true; // already in the desired state
+      const desiredOpen = !!open;
+      const isOpen = !f.hasAttribute("collapsed") && !f.hasAttribute("hide-chat-frame");
+      if (isOpen === desiredOpen) return true; // already in the desired state
       const btn = f.querySelector("#show-hide-button button")
         || document.querySelector("ytd-live-chat-frame #show-hide-button button");
-      if (!btn) return false;
-      btn.click();
-      return true;
+      if (btn) btn.click();
+      if (opts.optimistic) {
+        f.toggleAttribute("collapsed", !desiredOpen);
+        if (desiredOpen) f.removeAttribute("hide-chat-frame");
+      }
+      return !!btn || !!opts.optimistic;
     },
     nativeChatLabel: "YouTube",
     brandColor: "#FF0033",       // source-badge dot color on the docked tab
@@ -1237,8 +1242,22 @@
   function layoutTransitionActive() { return Date.now() < layoutQuietUntil; }
   function layoutQuietDelay(extra = 0) { return Math.max(0, layoutQuietUntil - Date.now()) + extra; }
   function setLayoutSuspended(on) {
-    root.classList.toggle("meridian-layout-transition", !!on);
-    dockTabBar?.classList.toggle("meridian-layout-transition", !!on);
+    if (on) {
+      root.classList.add("meridian-layout-transition");
+      dockTabBar?.classList.add("meridian-layout-transition");
+      dockAnchor?.classList.add("meridian-layout-transition");
+      return;
+    }
+    root.classList.remove("meridian-layout-transition");
+    dockTabBar?.classList.remove("meridian-layout-transition");
+    dockAnchor?.classList.remove("meridian-layout-transition");
+    document.querySelectorAll(".meridian-dock-anchor.meridian-layout-transition,.meridian-dock-tabs.meridian-layout-transition")
+      .forEach((el) => el.classList.remove("meridian-layout-transition"));
+  }
+  function releaseLayoutSuspension() {
+    setLayoutSuspended(false);
+    if (renderBuffer.length) scheduleRenderFlush();
+    if (emoteRegroupDirty) scheduleEmoteRender();
   }
   function beginLayoutQuiet(ms = 800) {
     layoutQuietUntil = Math.max(layoutQuietUntil, Date.now() + ms);
@@ -1246,18 +1265,18 @@
     if (layoutQuietTimer) clearTimeout(layoutQuietTimer);
     layoutQuietTimer = setTimeout(() => {
       layoutQuietTimer = null;
-      setLayoutSuspended(false);
-      if (renderBuffer.length) scheduleRenderFlush();
-      if (emoteRegroupDirty) scheduleEmoteRender();
+      if (!pendingModeTimer) releaseLayoutSuspension();
     }, layoutQuietDelay(32));
   }
   function scheduleDeferredModeApply(extra = 0) {
+    setLayoutSuspended(true);
     if (pendingModeTimer) clearTimeout(pendingModeTimer);
     pendingModeTimer = setTimeout(() => {
       pendingModeTimer = null;
       applyMode();
       refreshFloatOrigin();
       if (effectiveMode() === "overlay" && prefs.boundToPlayer) applyBoundMode();
+      requestAnimationFrame(releaseLayoutSuspension);
     }, layoutQuietDelay(extra));
   }
 
@@ -1777,14 +1796,37 @@
 
   // Re-home the overlay when entering/leaving fullscreen so it stays visible inside the
   // fullscreen element (fixes the Kick overlay vanishing in fullscreen).
-  document.addEventListener("pointerdown", (e) => {
-    if (e.target?.closest?.(".ytp-fullscreen-button")) beginLayoutQuiet(1000);
+  function isFullscreenIntentEvent(e) {
+    const path = e.composedPath?.() || [];
+    for (const n of path) {
+      if (n?.classList?.contains?.("ytp-fullscreen-button")) return true;
+      if (n?.matches?.(".ytp-fullscreen-button")) return true;
+    }
+    return !!e.target?.closest?.(".ytp-fullscreen-button");
+  }
+  const onFullscreenIntent = (e) => {
+    if (!isFullscreenIntentEvent(e)) return;
+    prepareNativeChatForLayout(fullscreenToggleTargetLayout());
+    beginLayoutQuiet(650);
+  };
+  document.addEventListener("pointerdown", onFullscreenIntent, { capture: true, passive: true });
+  document.addEventListener("mousedown", onFullscreenIntent, { capture: true, passive: true });
+  document.addEventListener("touchstart", onFullscreenIntent, { capture: true, passive: true });
+  document.addEventListener("dblclick", (e) => {
+    const player = SITE.findPlayer?.();
+    if (pageActive && player && player.contains(e.target) && !root.contains(e.target)) {
+      prepareNativeChatForLayout(fullscreenToggleTargetLayout());
+      beginLayoutQuiet(650);
+    }
   }, { capture: true, passive: true });
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     if (String(e.key || "").toLowerCase() !== "f") return;
     if (e.target?.closest?.("input,textarea,[contenteditable='true'],.meridian-root")) return;
-    if (pageActive) beginLayoutQuiet(1000);
+    if (pageActive) {
+      prepareNativeChatForLayout(fullscreenToggleTargetLayout());
+      beginLayoutQuiet(650);
+    }
   }, { capture: true });
   ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) =>
     document.addEventListener(ev, () => {
@@ -1797,10 +1839,10 @@
       }
       // Let YouTube complete the fullscreen transition before Meridian does any re-homing,
       // docking, seekbar reads, or chat DOM commits. This keeps us off the critical path.
-      beginLayoutQuiet(900);
+      beginLayoutQuiet(520);
       pauseFloatingReactions();
       markEmotesDirty();
-      scheduleDeferredModeApply(120);
+      scheduleDeferredModeApply(60);
     })
   );
   // Window resize also changes the seekbar width → regroup the emote markers (debounced via rAF).
@@ -3139,6 +3181,11 @@
     if (SITE.name === "youtube" && document.querySelector("ytd-watch-flexy[theater]")) return "theater";
     return "default";
   }
+  function fullscreenToggleTargetLayout() {
+    if (!isFullscreen()) return "fullscreen";
+    if (SITE.name === "youtube" && document.querySelector("ytd-watch-flexy[theater]")) return "theater";
+    return "default";
+  }
   // (LAYOUT_MODE_DEFAULTS declared near the top — read at setup.)
   // Resolve the per-layout map, migrating a legacy site-wide `.mode` ("auto"/"overlay"/"docked").
   function layoutModes() {
@@ -3169,11 +3216,19 @@
   }
   // Toggle YouTube's native chat from our own code WITHOUT the external-open observer mistaking it
   // for the user clicking YouTube's button (which would flip our dock tab to the YouTube source).
-  function setNativeChat(open) {
+  function setNativeChat(open, opts = {}) {
     if (!SITE.setNativeChatOpen) return;
     selfTogglingNative = true;
-    SITE.setNativeChatOpen(open);
+    SITE.setNativeChatOpen(open, opts);
     setTimeout(() => { selfTogglingNative = false; }, 600);
+  }
+  function nativeChatShouldOpenForLayout(layout) {
+    return layoutMode(layout) === "docked" && !hideNativeForLayout(layout);
+  }
+  function prepareNativeChatForLayout(layout) {
+    if (!SITE.nativeChatExists?.()) return;
+    const shouldOpen = nativeChatShouldOpenForLayout(layout);
+    if (SITE.isNativeChatOpen?.() !== shouldOpen) setNativeChat(shouldOpen, { optimistic: true });
   }
   // Watch YouTube's chat frame: if the user opens native chat via YouTube's OWN controls (not our
   // setNativeChat → guarded by selfTogglingNative), surface the YouTube source tab in our docked
@@ -3227,10 +3282,10 @@
   // Apply the saved show/hide default for a layout. Returns whether the transient hidden flag changed.
   function nativeChatDefaultActions(layout) {
     if (!SITE.nativeChatExists?.()) return { hiddenChanged: false };
-    const hide = hideNativeForLayout(layout);
+    const shouldOpen = nativeChatShouldOpenForLayout(layout);
     const docked = layoutMode(layout) === "docked";
     let hiddenChanged = false;
-    if (hide) {
+    if (!shouldOpen) {
       if (SITE.isNativeChatOpen?.()) setNativeChat(false);
       if (docked && !siteHidden()) {
         const sites = { ...(prefs.sites || {}) };
@@ -3257,7 +3312,7 @@
     hideNativeAppliedKey = key;
     const { hiddenChanged } = nativeChatDefaultActions(currentLayout());
     if (hiddenChanged) applyMode();
-    else if (!hideNativeForLayout() && layoutMode() === "docked") applyDockTab();
+    else if (nativeChatShouldOpenForLayout(currentLayout())) applyDockTab();
   }
   // Set the transient show/hide flag (bubble / × / hotkey). Kept separate from the per-layout mode
   // so revealing returns to the layout's chosen overlay/docked.
@@ -3421,6 +3476,7 @@
     }
     dockAnchor = anchor;
     anchor.classList.add("meridian-dock-anchor");
+    anchor.classList.toggle("meridian-layout-transition", layoutTransitionActive());
     // Mount root + tab bar into the anchor FIRST, before any sizing — sizeDockAnchor() dispatches a
     // resize that can re-enter the layout, so if it ran before the mount a hiccup there would leave
     // root parented to the player with the docked class (= covering the whole player). Mount first.
