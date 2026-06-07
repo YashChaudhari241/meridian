@@ -58,14 +58,14 @@
       <div class="hint" id="siteHint"></div>
     </div>
     <div class="card" id="ytLoadOnCard" title="Choose whether the overlay loads on livestreams only or on every YouTube video">
-      <label>Load chat on</label>
+      <label>Enable chat for</label>
       <select id="ytLoadOn">
         <option value="live">Livestreams only</option>
         <option value="all">All videos</option>
       </select>
     </div>
     <div class="card" id="hideYoutubeChatCard" title="Whether YouTube's live chat starts open or collapsed for each layout (only applied on page load or when you switch layouts). In docked mode Meridian stays coupled with YouTube chat.">
-      <label>YouTube chat by default</label>
+      <label>Docked chat default visibility</label>
       <div class="row native-chat-row" id="hideNativeDefaultRow">
         <span class="native-chat-label">Default view</span>
         <div class="split-pill" data-layout="default">
@@ -89,7 +89,7 @@
       </div>
     </div>
     <div class="card" title="Keep the overlay inside the player, following theater and fullscreen">
-      <label class="row"><span>Bind overlay to the video player</span><input id="boundToPlayer" type="checkbox" /></label>
+      <label class="row"><span>Anchor to player</span><input id="boundToPlayer" type="checkbox" /></label>
     </div>
     <div class="card" id="ytMappingsCard" title="Map this page's YouTube handle to a Twitch channel, joined automatically">
       <label>YouTube → Twitch mappings (one per line: <code>handle = twitch_channel</code>)</label>
@@ -128,14 +128,14 @@
       </div>
     </div>
     <div class="card" title="Maximum messages kept in the chat view">
-      <label>Max messages kept in view</label>
+      <label>Chat History Limit</label>
       <div class="row">
         <input id="maxMessages" type="number" min="50" max="2000" step="50" />
         <button id="saveMaxMessages">Save</button>
       </div>
     </div>
     <div class="card" title="When you hide the chat, also disconnect from Twitch. Off (default): hiding is visual only — emotes, highlights and the timeline keep processing in the background.">
-      <label class="row"><span>Disconnect chat on hide</span><input id="disconnectOnHide" type="checkbox" /></label>
+      <label class="row"><span>Disconnect on Hide</span><input id="disconnectOnHide" type="checkbox" /></label>
     </div>
     <div class="card" title="Visually mark channel-points &quot;Highlight My Message&quot; redemptions with a purple wash">
       <label class="row"><span>Highlight redeemed messages</span><input id="markHighlightedMsgs" type="checkbox" /></label>
@@ -216,7 +216,7 @@ word2"></textarea>
   <section class="panel" data-tab="timeline">
     <div class="card">
       <label class="row" title="Show a chat activity wave over the live seekbar on YouTube livestreams">
-        <span>Highlight timeline (chat-activity wave)</span>
+        <span>Show chat intensity on timeline</span>
         <input id="highlightTimeline" type="checkbox" />
       </label>
       <label class="row" title="Mark emote surges on the seekbar (works with or without the wave). Click one to jump to that moment">
@@ -228,7 +228,7 @@ word2"></textarea>
         <input id="highlightColor" type="color" />
       </label>
       <label class="row" title="Keep emote surge markers for this video and replay them on the VOD after the stream ends (matched by the video's URL)">
-        <span>Retain emote highlights</span>
+        <span>Save Emote Highlights</span>
         <input id="highlightPersistEmotes" type="checkbox" />
       </label>
       <label class="row" title="Keep the chat-intensity wave for this video and replay it on the VOD after the stream ends (matched by the video's URL)">
@@ -260,7 +260,7 @@ word2"></textarea>
         <span>Anchor highlights to the live edge</span>
         <input id="highlightAnchorLive" type="checkbox" />
       </label>
-      <label style="margin-top:10px;" title="Shift the wave and markers this many seconds into the past for reaction time">Highlight timeline offset (seconds)</label>
+      <label style="margin-top:10px;" title="Shift the wave and markers this many seconds into the past for reaction time">Chat intensity timeline offset (seconds)</label>
       <div class="row" title="Shift the wave and markers this many seconds into the past for reaction time">
         <input id="highlightOffset" type="number" min="0" max="120" step="1" />
         <button id="saveHighlightOffset">Save</button>
@@ -377,7 +377,7 @@ word2"></textarea>
       </div>
     </div>
     <div class="card" title="Delete the saved chat-intensity wave for every video/channel">
-      <label>Stored highlight timeline</label>
+      <label>Stored chat intensity</label>
       <div class="hint">Delete the saved chat-intensity wave (replayed on VODs).</div>
       <div class="row">
         <button id="resetDensity" class="secondary">Clear timeline data</button>

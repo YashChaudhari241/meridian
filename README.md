@@ -34,7 +34,7 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 - **Smooth fullscreen switching** — entering fullscreen prepares YouTube chat for the target layout first, so overlay/hidden fullscreen modes do not briefly reserve the docked chat column.
 - **Draggable show/hide bubble** — when chat is hidden, drag the bubble anywhere on screen; its position is remembered.
 - **Auto show on activity surges** (optional) — automatically reveal hidden chat during a burst of messages, then hide it again after a few seconds.
-- **YouTube chat by default** per layout — Show or Hide on load / layout change (Site tab split pills). Meridian only opens YouTube chat when that layout is docked, and keeps docked visibility coupled with YouTube chat.
+- **Docked chat default visibility** per layout — Show or Hide on load / layout change (Site tab split pills). Meridian only opens YouTube chat when that layout is docked, and keeps docked visibility coupled with YouTube chat.
 
 ### Chat
 - **Live Twitch IRC**: badges, colors, `/me` actions, and case-correct display names.
@@ -48,8 +48,8 @@ See [PRIVACY.md](./PRIVACY.md) for the full data-handling policy.
 - **Blocklist** (hide messages by word) and **hide-deleted-messages** (remove moderated lines instead of dimming them).
 - **Send messages** once you connect your Twitch account.
 
-### Timeline highlights (YouTube livestreams)
-- **Chat-activity wave** — a YouTube "most-replayed"-style density wave drawn over the live seekbar, scaled to chat messages-per-second. Resolution adapts to stream length.
+### Chat intensity (YouTube livestreams)
+- **Chat intensity** — a YouTube "most-replayed"-style density wave drawn over the live seekbar, scaled to chat messages-per-second. Resolution adapts to stream length.
 - **Emote surge markers** — when enough unique viewers spam one emote in a short window, the emote is perched on the wave at that moment. **Click to seek** straight to it.
   
 ### Channels
