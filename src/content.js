@@ -343,6 +343,8 @@
   let connecting = false;          // guards ensureConnected against overlapping attempts
   let currentAuth = null;
   let emoteReg = null;
+  let lastJoined = "";             // live IRC channel — hoisted: updateChannelInputFromPrefs() runs at setup
+  let ircStatusExtra = null;
   let dockRetryTimer = null;
   // Docked-mode tab switcher state (native site chat ⇄ our Twitch chat).
   let dockTabBar = null;
@@ -1499,8 +1501,6 @@
     viewerTimer = setInterval(fetchViewers, 90000);
   }
 
-  let lastJoined = "";
-  let ircStatusExtra = null;
   function clearActiveChannel() {
     lastJoined = "";
     prefs._activeChannel = "";
