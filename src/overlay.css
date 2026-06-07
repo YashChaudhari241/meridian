@@ -801,6 +801,11 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
   width: 100%;
   display: block;
   filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.35));
+  pointer-events: auto;
+}
+.meridian-wave-hit {
+  fill: transparent;
+  pointer-events: all;
 }
 /* `vector-effect` keeps the rounded crest crisp regardless of the non-uniform stretch. */
 .meridian-wave-path { vector-effect: non-scaling-stroke; }
@@ -906,6 +911,7 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
 .meridian-surge-tip-name { font-size: 12px; font-weight: 600; color: #F5F5F6; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meridian-surge-tip-time { font-size: 10.5px; color: #82828C; font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-top: 1px; }
 .meridian-surge-tip-stats { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.meridian-timeline-tip-stats { justify-content: center; }
 .meridian-surge-tip-rate { font-size: 16px; font-weight: 700; color: #F5F5F6; font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1; letter-spacing: -.02em; }
 .meridian-surge-tip-rate span { font-size: 9.5px; color: #82828C; font-weight: 500; margin-left: 2px; }
 .meridian-surge-tip-uniq { font-size: 10.5px; color: #82828C; }

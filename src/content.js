@@ -439,6 +439,7 @@
     onUpdate: bumpHighlight
   });
   let waveLayer = null;
+  let timelineHoverBar = null;
   let emoteMarkers = [];
   let emoteRegroupDirty = true, emoteLastBarW = 0, emoteLastRegroupAt = 0, emoteBox = null;
   let emoteRenderQueued = false, emoteRenderDelayTimer = null;
@@ -2363,9 +2364,20 @@
   }
 
   // --- wave + emote rendering ---
+  function bindTimelineHover(bar) {
+    if (!bar || timelineHoverBar === bar) return;
+    if (timelineHoverBar) {
+      timelineHoverBar.removeEventListener("mousemove", showTimelineRateTip);
+      timelineHoverBar.removeEventListener("mouseleave", hideSurgeTip);
+    }
+    timelineHoverBar = bar;
+    timelineHoverBar.addEventListener("mousemove", showTimelineRateTip);
+    timelineHoverBar.addEventListener("mouseleave", hideSurgeTip);
+  }
   function ensureWaveLayer() {
     const bar = SITE.findSeekbar?.();
     if (!bar) return null;
+    bindTimelineHover(bar);
     if (waveLayer && waveLayer.parentElement === bar) return waveLayer;
     if (waveLayer && waveLayer.parentElement) waveLayer.remove();
     waveLayer = document.createElement("div");
@@ -2390,6 +2402,12 @@
       grad.appendChild(st);
     }
     defs.appendChild(grad);
+    const hit = document.createElementNS(SVGNS, "rect");
+    hit.setAttribute("class", "meridian-wave-hit");
+    hit.setAttribute("x", "0");
+    hit.setAttribute("y", "0");
+    hit.setAttribute("width", "100");
+    hit.setAttribute("height", "100");
     const path = document.createElementNS(SVGNS, "path");
     path.setAttribute("class", "meridian-wave-path");
     path.setAttribute("fill", "url(#meridianWaveGrad)");
@@ -2398,7 +2416,9 @@
     topline.setAttribute("class", "meridian-wave-topline");
     topline.setAttribute("fill", "none");
     topline.setAttribute("stroke", wc);
-    svg.append(defs, path, topline);
+    svg.append(defs, hit, path, topline);
+    svg.addEventListener("mousemove", showTimelineRateTip);
+    svg.addEventListener("mouseleave", hideSurgeTip);
     const emotes = document.createElement("div");
     emotes.className = "meridian-wave-emotes";
     waveLayer.append(svg, emotes);
@@ -2569,6 +2589,21 @@
       `<div class="meridian-surge-tip-uniq"><b>${lead.count || 0}</b> spamming</div>`;
     tip.append(stats);
   }
+  function timelineRateAtFrac(frac) {
+    if (!prefs.highlightTimeline || !lastSeries || lastSeries.length < 2) return null;
+    return Math.max(0, Math.round(waveHeightAtFrac(frac) * (densityPeak || 1) * 60));
+  }
+  function buildTimelineRateTipContent(frac) {
+    const rate = timelineRateAtFrac(frac);
+    if (rate == null) return false;
+    const tip = surgeTip;
+    tip.replaceChildren();
+    const stats = document.createElement("div");
+    stats.className = "meridian-surge-tip-stats meridian-timeline-tip-stats";
+    stats.innerHTML = `<div class="meridian-surge-tip-rate">${rate}<span>msg/min</span></div>`;
+    tip.append(stats);
+    return true;
+  }
   // Position the shared tooltip directly above YouTube's preview, matched to its width; if the
   // preview isn't up, fall back to floating above the seekbar at the marker's x.
   function positionSurgeTip(frac) {
@@ -2607,6 +2642,19 @@
     if (!ensureSurgeTip()) return;
     surgeTipLead = { lead, frac, secondary };
     buildSurgeTipContent(lead, frac, secondary);
+    positionSurgeTip(frac);
+    surgeTip.style.display = "block";
+    armSurgeTipIdle();
+  }
+  function showTimelineRateTip(e) {
+    if (e?.target?.closest?.(".meridian-wave-emote")) return;
+    if (!ensureSurgeTip()) return;
+    const sb = SITE.findSeekbar?.();
+    const sr = sb && sb.getBoundingClientRect();
+    if (!sr || sr.width <= 0) return;
+    const frac = Math.max(0, Math.min(1, (e.clientX - sr.left) / sr.width));
+    surgeTipLead = null;
+    if (!buildTimelineRateTipContent(frac)) { hideSurgeTip(); return; }
     positionSurgeTip(frac);
     surgeTip.style.display = "block";
     armSurgeTipIdle();
@@ -3707,7 +3755,17 @@
     const o = await chrome.storage.local.get(PREFS_KEY);
     return o[PREFS_KEY] || {};
   }
-  async function savePrefs() { await chrome.storage.local.set({ [PREFS_KEY]: prefs }); }
+  function isExtensionContextInvalidated(err) {
+    return /Extension context invalidated/i.test(String(err?.message || err || ""));
+  }
+  async function savePrefs() {
+    try {
+      await chrome.storage.local.set({ [PREFS_KEY]: prefs });
+    } catch (err) {
+      if (isExtensionContextInvalidated(err)) return;
+      throw err;
+    }
+  }
 
   function cssEscape(s) {
     return (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/"/g, '\\"'));
