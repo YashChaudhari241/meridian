@@ -354,6 +354,9 @@
   let dockAnchorPosSet = false; // whether we set inline position:relative on the anchor
   let dockForcedFixed = false;  // whether we've pinned the frame fixed into the reserved theater strip
   let dockLayoutObs = null;     // reacts to theater/hide-chat toggles so the layout updates instantly
+  let natChatObs = null, natChatObsTarget = null; // native-chat coupling observer
+  let layoutObs = null, layoutObsTarget = null;   // YouTube theater-layout observer
+  let selfTogglingNative = false; // guards native-chat observer while our own code toggles it
   let sizeDebTimer = null;      // trailing debounce so load-time attribute flapping doesn't thrash layout
   let repinRaf = 0;             // rAF guard for re-pinning the theater-fixed chat on scroll
   let layoutQuietUntil = 0;     // short grace period after fullscreen/theater transitions
@@ -398,6 +401,46 @@
   // exists, floats in fullscreen). Declared early — effectiveMode()→layoutMode() reads it at setup.
   const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
   const HIDE_NATIVE_DEFAULTS = { default: false, theater: false, fullscreen: true };
+  // Surge + hold-hotkey state is read by callbacks that can be installed before their feature
+  // sections execute, so keep the cells initialized up front.
+  let rateStamps = [];
+  let rateHead = 0;
+  let baselineRate = 0;
+  let autoHideTimer = null;
+  let scrollHoldKey = null;
+  let scrollHoldReleaseTimer = null;
+  let idleTimer = null;
+  let userScrollUntil = 0;
+  let scrollbarTimer = null;
+  let pinRaf = 0;
+  // Timeline state is touched by storage/channel/layout startup paths before the timeline section.
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const HIGHLIGHT_CAP = 300;
+  const density = new DensityTracker({ baseRes: 2 });
+  const highlights = new Map();
+  const hlEngine = new HighlightEngine({
+    windowMs: 12000,
+    getThreshold: highlightThreshold,
+    onHighlight: addHighlight,
+    onUpdate: bumpHighlight
+  });
+  let waveLayer = null;
+  let emoteMarkers = [];
+  let emoteRegroupDirty = true, emoteLastBarW = 0, emoteLastRegroupAt = 0, emoteBox = null;
+  let emoteRenderQueued = false, emoteRenderDelayTimer = null;
+  const EMOTE_REGROUP_MS = 30000;
+  let lastSeries = null, lastSpan = 0, lastStart = 0, lastOff = 0;
+  let densityRes = 5, densityPeak = 1, lastPeakAt = 0, lastResAt = 0;
+  let liveEdgeVt = 0, liveEdgeAt = 0;
+  let highlightsKey = "";
+  let saveHlTimer = null;
+  let densityKey = "";
+  let saveDensityTimer = null, densityDirty = false, lastDensityPruneAt = 0;
+  const DENSITY_SAVE_MS = 60000;
+  const DENSITY_PRUNE_MS = 60000;
+  let densityArmed = false;
+  let atLiveCached = true;
+  hlEngine.windowMs = highlightWindow() * 1000;
 
   // Blocklist: rebuilt from prefs whenever prefs.blockedWords changes.
   // O(1) membership check per word; O(n) per message (n = word count).
@@ -1768,10 +1811,7 @@
   // chat WHILE it's hidden, then re-hides it after `autoShowVisibleSec`. It only acts on a hidden
   // overlay (never hides one the user has up) and any manual interaction cancels the pending re-hide
   // ("return to prior state"). Site-agnostic + independent of the YouTube-live density wave.
-  let rateStamps = [];       // arrival ts of recent 'msg's, trimmed to the window each tick
-  let rateHead = 0;          // avoids Array.shift() churn during long high-volume sessions
-  let baselineRate = 0;      // EMA of per-second msg rate (auto-calibrating)
-  let autoHideTimer = null;
+  // rateStamps/rateHead/baselineRate/autoHideTimer are initialized with the early runtime state.
   function autoShowWindowMs() { return Math.max(1, Math.min(60, prefs.autoShowWindowSec | 0 || 4)) * 1000; }
   function noteMsgForRate(ts) { if (prefs.autoShowHide) rateStamps.push(ts || Date.now()); }
   function cancelAutoHide() { if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; } }
@@ -1886,8 +1926,7 @@
   // A press-and-HOLD gesture (not a one-shot toggle), so it gets its own matcher that accepts a
   // SINGLE bare key — "S", "Space", or even holding a lone modifier like "Alt". Holding the key
   // freezes autoscroll; releasing it (or the window losing focus) resumes + snaps to the bottom.
-  let scrollHoldKey = null;          // the raw e.key currently holding the pause open, or null
-  let scrollHoldReleaseTimer = null; // deferred resume (so X11 autorepeat keyup+keydown can cancel it)
+  // scrollHoldKey/scrollHoldReleaseTimer are initialized with the early runtime state.
   function isEditableTarget(el) {
     return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
   }
@@ -1922,7 +1961,7 @@
   document.addEventListener("visibilitychange", () => { if (document.hidden) endScrollHold(); });
 
   // --- inactivity → hide bars after 10s, blur input but keep typed text ---
-  let idleTimer = null;
+  // idleTimer is initialized with the early runtime state.
   function startIdleTimer() {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
@@ -2003,8 +2042,7 @@
   });
 
   // --- autoscroll + scrollbar visibility ---
-  let userScrollUntil = 0;
-  let scrollbarTimer = null;
+  // userScrollUntil/scrollbarTimer/pinRaf are initialized with the early runtime state.
   function showScrollbar() {
     els.messages.classList.add("scrolling");
     if (scrollbarTimer) clearTimeout(scrollbarTimer);
@@ -2016,7 +2054,6 @@
   // `contain-intrinsic-size`) when we first read `scrollHeight` — the initial snap can land a line
   // short and clip the row's second line below the fold. Once the row scrolls into view it lays out
   // at its true height; the rAF re-snap (coalesced) corrects to the real bottom.
-  let pinRaf = 0;
   function pinToBottom() {
     const m = els.messages;
     const _t = pnow();
@@ -2064,29 +2101,16 @@
   //   2. EMOTE highlights — when ≥ threshold unique viewers spam one emote in ~12 s, a small
   //      emote sits on the wave at that moment. Near-together emotes are grouped (one shown +
   //      a "+N" badge); grouping also caps the total rendered at ~50. Requires the wave.
-  const SVGNS = "http://www.w3.org/2000/svg";
-  const HIGHLIGHT_CAP = 300;    // max emote highlights kept in memory (and persisted) per video
-  const density = new DensityTracker({ baseRes: 2 });
-  const highlights = new Map(); // key -> { name, url, count, threshold, wallTs, vt, behindLive }
-  const hlEngine = new HighlightEngine({
-    windowMs: highlightWindow() * 1000,            // per-channel/global; refreshed below, not per-occurrence
-    getThreshold: highlightThreshold,
-    onHighlight: addHighlight,
-    onUpdate: bumpHighlight
-  });
+  // Timeline engine state is initialized with the early runtime state because startup/storage paths
+  // can touch it before this section executes.
   // Push the resolved window into the engine on channel switch / pref change (keeps the per-message
   // hot path a plain field read instead of re-resolving the channel + clamping every occurrence).
   function applyHighlightWindow() { hlEngine.windowMs = highlightWindow() * 1000; }
-  let waveLayer = null;
   // Emote-marker clustering is DECOUPLED from positioning. `emoteMarkers` is the current grouping
   // (each marker carries its leader, secondary list, +N, and reused DOM refs). It's recomputed only
   // when "dirty" — a new/updated surge, a seekbar-width change (fullscreen / theater / window resize
   // → FP changes), the wave layer being re-homed, or a 30 s safety timer (slow span-growth merges) —
   // while the cheap per-tick position pass just slides the existing DOM along the scrolling seekbar.
-  let emoteMarkers = [];
-  let emoteRegroupDirty = true, emoteLastBarW = 0, emoteLastRegroupAt = 0, emoteBox = null;
-  let emoteRenderQueued = false, emoteRenderDelayTimer = null;
-  const EMOTE_REGROUP_MS = 30000;
   function markEmotesDirty() { emoteRegroupDirty = true; }
   // rAF-debounced render so a burst of surges arriving in quick succession coalesces into ONE
   // regroup+reposition instead of one per surge (the 2 s loop also drives renderEmotes directly).
@@ -2104,11 +2128,8 @@
     emoteRenderQueued = true;
     requestAnimationFrame(() => { emoteRenderQueued = false; renderEmotes(); });
   }
-  let lastSeries = null, lastSpan = 0, lastStart = 0, lastOff = 0;
-  let densityRes = 5, densityPeak = 1, lastPeakAt = 0, lastResAt = 0;
   // Cached seekbar stream-time live edge so the per-message hot path can timestamp density in the
   // SAME coordinate space as the emote markers (no DOM read per message). Refreshed by the 2 s loop.
-  let liveEdgeVt = 0, liveEdgeAt = 0;
   function waveColor() { return prefs.highlightColor || "#b388ff"; }
   function applyWaveColor() {
     if (!waveLayer) return;
@@ -2119,15 +2140,8 @@
     // Stems/dots carry the accent inline (set at regroup) — re-tint them on the next pass.
     markEmotesDirty(); scheduleEmoteRender();
   }
-  let highlightsKey = "";
-  let saveHlTimer = null;
-  let densityKey = "";
-  let saveDensityTimer = null, densityDirty = false, lastDensityPruneAt = 0;
-  const DENSITY_SAVE_MS = 60000;
-  const DENSITY_PRUNE_MS = 60000;
   // Refreshed by the 2 s render loop so the per-message hot path needs no DOM access.
-  let densityArmed = false;
-  let atLiveCached = true; // whether playback is at/near the live edge (refreshed by the 2 s loop)
+  // densityArmed/atLiveCached are initialized with the early runtime state.
 
   // Only record while the viewer is at the live edge. When they scrub back to replay, the wave +
   // emote detection key off the live edge, so we pause recording (existing markers stay correctly
@@ -3155,7 +3169,6 @@
   }
   // Toggle YouTube's native chat from our own code WITHOUT the external-open observer mistaking it
   // for the user clicking YouTube's button (which would flip our dock tab to the YouTube source).
-  let selfTogglingNative = false;
   function setNativeChat(open) {
     if (!SITE.setNativeChatOpen) return;
     selfTogglingNative = true;
@@ -3166,7 +3179,6 @@
   // setNativeChat → guarded by selfTogglingNative), surface the YouTube source tab in our docked
   // panel. Showing it via our hotkey/bubble keeps the Twitch tab (set in showChat). Re-attaches when
   // the SPA swaps the frame.
-  let natChatObs = null, natChatObsTarget = null;
   function ensureNativeChatObserver() {
     const f = SITE.findDockAnchor?.();
     if (!f || f === natChatObsTarget) return;
@@ -3190,7 +3202,6 @@
   // Watch YouTube's theater toggle so a layout change (default ⇄ theater) re-dispatches applyMode
   // instantly — applying that layout's overlay/docked + hide-native default — instead of waiting up
   // to 2 s for the poll. (Fullscreen is handled by the fullscreenchange listener.)
-  let layoutObs = null, layoutObsTarget = null;
   function ensureLayoutObserver() {
     if (SITE.name !== "youtube") return;
     const wf = document.querySelector("ytd-watch-flexy");
