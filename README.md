@@ -6,6 +6,14 @@ Runs entirely in your browser — no backend, no tracking, no account required t
 
 > Developers: see [DEVELOPMENT.md](./DEVELOPMENT.md) for install, Twitch setup, and debugging.
 
+## Screenshots
+
+![Transparent Twitch chat overlay on a YouTube video](./docs/screenshots/main-overlay.png)
+
+![Docked Twitch chat tab inside YouTube's chat panel](./docs/screenshots/docked-chat.png)
+
+![Emote surge markers pinned to the YouTube seekbar](./docs/screenshots/emote-highlights.png)
+
 ---
 
 ## Permissions
