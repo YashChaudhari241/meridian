@@ -1964,13 +1964,18 @@
     root.classList.add("meridian-idle");
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   }
-  document.addEventListener("keydown", (e) => {
+  window.addEventListener("keydown", (e) => {
     // comboFromEvent requires a modifier, so plain typing in our input never reaches a hotkey.
     const combo = comboFromEvent(e);
     if (!combo) return;
-    if (prefs.hotkeyToggle && combo === prefs.hotkeyToggle) { e.preventDefault(); toggleVisibility(); }
+    if (prefs.hotkeyToggle && combo === prefs.hotkeyToggle) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      toggleVisibility();
+    }
     else if (prefs.hotkeyFocus && combo === prefs.hotkeyFocus) {
       e.preventDefault();
+      e.stopImmediatePropagation();
       // Pressing the focus hotkey while the input is already focused toggles back off.
       if (document.activeElement === els.input) unfocusChatInput();
       else focusChatInput();
@@ -1993,7 +1998,7 @@
     scrollHoldKey = null;
     resumeAutoscroll(); // clears the paused state + snaps to the bottom to catch up
   }
-  document.addEventListener("keydown", (e) => {
+  window.addEventListener("keydown", (e) => {
     const spec = prefs.hotkeyPauseScroll;
     if (!spec || hotkeySpecFromEvent(e) !== spec) return;
     // Autorepeat (notably X11) fires keyup+keydown pairs while a key is held; a pending release here
@@ -2002,12 +2007,14 @@
     if (scrollHoldKey) return; // already holding
     if (specIsBarePrintable(spec) && isEditableTarget(document.activeElement)) return; // let typing through
     e.preventDefault();
+    e.stopImmediatePropagation();
     scrollHoldKey = e.key;
     setResumePill(true);
   }, true);
-  document.addEventListener("keyup", (e) => {
+  window.addEventListener("keyup", (e) => {
     if (!scrollHoldKey || e.key !== scrollHoldKey || scrollHoldReleaseTimer) return;
     e.preventDefault();
+    e.stopImmediatePropagation();
     // Defer slightly so an autorepeat keydown can cancel it; a real release fires after the delay.
     scrollHoldReleaseTimer = setTimeout(() => { scrollHoldReleaseTimer = null; endScrollHold(); }, 60);
   }, true);
@@ -3770,6 +3777,9 @@
   function cssEscape(s) {
     return (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/"/g, '\\"'));
   }
+  function hotkeyKeyName(k) {
+    return k === " " ? "Space" : (String(k || "").length === 1 ? String(k).toUpperCase() : k);
+  }
   function comboFromEvent(e) {
     if (["Control","Alt","Shift","Meta"].includes(e.key)) return null;
     const parts = [];
@@ -3778,7 +3788,7 @@
     if (e.shiftKey) parts.push("Shift");
     if (e.metaKey) parts.push("Meta");
     if (parts.length === 0) return null;
-    parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    parts.push(hotkeyKeyName(e.key));
     return parts.join("+");
   }
   // Like comboFromEvent but allows a BARE key (no modifier) and a lone modifier — used by the
@@ -3791,7 +3801,7 @@
     if (e.altKey) parts.push("Alt");
     if (e.shiftKey) parts.push("Shift");
     if (e.metaKey) parts.push("Meta");
-    const named = k === " " ? "Space" : (k.length === 1 ? k.toUpperCase() : k);
+    const named = hotkeyKeyName(k);
     parts.push(named);
     return parts.join("+");
   }

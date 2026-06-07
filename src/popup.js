@@ -676,6 +676,10 @@ function bindHotkey(prefKey, inputSel, captureSel, clearSel) {
 bindHotkey("hotkeyToggle", "#hotkeyToggle", "#hotkeyToggleCapture", "#hotkeyToggleClear");
 bindHotkey("hotkeyFocus",  "#hotkeyFocus",  "#hotkeyFocusCapture",  "#hotkeyFocusClear");
 
+function hotkeyKeyName(k) {
+  return k === " " ? "Space" : (String(k || "").length === 1 ? String(k).toUpperCase() : k);
+}
+
 // Like comboFromEvent but allows a BARE single key (and a lone modifier) — for the hold-to-pause
 // hotkey. Must match content.js's hotkeySpecFromEvent so saved specs compare equal at runtime.
 function hotkeySpecFromEvent(e) {
@@ -686,7 +690,7 @@ function hotkeySpecFromEvent(e) {
   if (e.altKey) parts.push("Alt");
   if (e.shiftKey) parts.push("Shift");
   if (e.metaKey) parts.push("Meta");
-  const named = k === " " ? "Space" : (k.length === 1 ? k.toUpperCase() : k);
+  const named = hotkeyKeyName(k);
   parts.push(named);
   return parts.join("+");
 }
@@ -718,7 +722,7 @@ function comboFromEvent(e) {
   const k = e.key;
   if (["Control","Alt","Shift","Meta"].includes(k)) return null;
   if (parts.length === 0) return null;
-  parts.push(k.length === 1 ? k.toUpperCase() : k);
+  parts.push(hotkeyKeyName(k));
   return parts.join("+");
 }
 
