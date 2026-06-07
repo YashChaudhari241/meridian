@@ -13,6 +13,8 @@
   --meridian-input-h: 44px;
   --meridian-banner-h: 19px;
   --meridian-blur: 6px;
+  --meridian-text-shadow-a: 0.6;
+  --meridian-text-outline-w: 0.4px;
   --meridian-radius: 14px;
   color: #F5F5F6;
   font-family: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -49,14 +51,14 @@
 }
 .meridian-root.meridian-dragging .meridian-bg { transition: none; }
 
-/* Appearance toggles. */
-.meridian-root.no-blur .meridian-bg {
+/* Appearance toggles (overlay mode only — docked uses a fixed solid panel). */
+.meridian-root:not(.meridian-docked).no-blur .meridian-bg {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-.meridian-root.no-bg .meridian-bg { background: transparent; }
-.meridian-root.no-shadow .meridian-bg { box-shadow: none; }
-.meridian-root.no-outline .meridian-bg { border-color: transparent; }
+.meridian-root:not(.meridian-docked).no-bg .meridian-bg { background: transparent; }
+.meridian-root:not(.meridian-docked).no-shadow .meridian-bg { box-shadow: none; }
+.meridian-root:not(.meridian-docked).no-outline .meridian-bg { border-color: transparent; }
 
 /* Bars — present at full size at top:0 / bottom:0. Toggled with `visibility`
    so they don't slide, just appear/disappear as the bg expands/contracts. */
@@ -246,6 +248,7 @@
   transition: background 130ms cubic-bezier(.2,.6,.2,1), color 130ms cubic-bezier(.2,.6,.2,1);
 }
 .meridian-btn:hover { background: rgba(255,255,255,0.08); color: #F5F5F6; }
+.meridian-btn:disabled { opacity: 0.35; pointer-events: none; cursor: default; }
 
 .meridian-status {
   position: absolute;
@@ -320,8 +323,10 @@
   height: 2px;
   width: 100%;
   background: rgb(var(--banner-color));
+  transform: scaleX(0);
   transform-origin: left center;
   pointer-events: none;
+  will-change: transform;
 }
 @keyframes meridian-banner-pulse {
   0%, 100% { opacity: 0.4; transform: scale(0.82); }
@@ -433,14 +438,14 @@
 .meridian-root.text-shadow .meridian-text,
 .meridian-root.text-shadow .meridian-name,
 .meridian-root.text-shadow .meridian-msg.notice {
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, var(--meridian-text-shadow-a, 0.6));
 }
 /* Our own username is a white pill (already has a background), so it needs no shadow. */
 .meridian-root.text-shadow .meridian-msg.self .meridian-name { text-shadow: none; }
 .meridian-root.text-outline .meridian-text,
 .meridian-root.text-outline .meridian-name,
 .meridian-root.text-outline .meridian-msg.notice {
-  -webkit-text-stroke: 0.4px rgba(0, 0, 0, 0.9);
+  -webkit-text-stroke: var(--meridian-text-outline-w, 0.4px) #000;
   paint-order: stroke fill;
 }
 .meridian-root.text-bold .meridian-text { font-weight: 600; }
@@ -632,14 +637,24 @@
   z-index: 2147483600;
   pointer-events: none;
   overflow: hidden;
+  contain: strict;
 }
 .meridian-float-emote {
   position: fixed;
-  width: 22px;
-  height: 22px;
   object-fit: contain;
   pointer-events: none;
-  will-change: transform, opacity;
+  transform: translate(-50%, -50%);
+  animation: meridian-float-drift var(--fdur, 1400ms) ease-out forwards;
+}
+@keyframes meridian-float-drift {
+  from {
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1);
+    opacity: 1;
+  }
+  to {
+    transform: translate(-50%, -50%) translate3d(var(--fdx, 0), var(--fdy, 0), 0) scale(0.65);
+    opacity: 0.15;
+  }
 }
 
 .meridian-btn.active { color: #A98AFF; background: rgba(130, 87, 255, 0.16); }

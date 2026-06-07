@@ -98,15 +98,17 @@ const defaults = {
   highlightOffsetSec: 5, highlightColor: "#b388ff",
   highlightPersistEmotes: true, highlightPersistDensity: true, showViewers: false,
   emote7tv: true, emoteBttv: true, emoteFfz: true,
-  textStyle: "shadow", boldText: true,
+  textShadowEnabled: true, textOutlineEnabled: true,
+  textShadowIntensity: 60, textOutlineWidth: 1,
   ytLoadOn: "live", hideYoutubeChat: false, disconnectOnHide: false,
-  markHighlightedMsgs: true, autoShowHide: false, autoShowWindowSec: 5, autoShowVisibleSec: 8,
-  autoShowSurgeFactor: 3, autoShowMinRate: 4,
-  floatingReactions: true, floatingReactionPath: 100, floatingReactionDurationMs: 1400,
-  floatingReactionStartDelayMs: 1200
+  markHighlightedMsgs: true, autoShowHide: false, autoShowWindowSec: 4, autoShowVisibleSec: 15,
+  autoShowSurgeFactor: 2, autoShowMinRate: 3,
+  floatingReactions: false, floatingReactionPath: 250, floatingReactionDurationMs: 2000,
+  floatingReactionStartDelayMs: 1200, floatingReactionSize: 48, floatingReactionDirection: "center"
 };
 // Per-layout overlay/docked defaults — mirror content.js LAYOUT_MODE_DEFAULTS.
 const LAYOUT_MODE_DEFAULTS = { default: "docked", theater: "docked", fullscreen: "overlay" };
+const HIDE_NATIVE_DEFAULTS = { default: false, theater: false, fullscreen: true };
 
 async function getPrefs() {
   const o = await chrome.storage.local.get(PREFS_KEY);
@@ -162,14 +164,16 @@ async function loadAllFields() {
   $("#disconnectOnHide").checked = p.disconnectOnHide === true;
   $("#markHighlightedMsgs").checked = p.markHighlightedMsgs !== false;
   $("#autoShowHide").checked = p.autoShowHide === true;
-  $("#autoShowWindow").value = p.autoShowWindowSec ?? 5;
-  $("#autoShowVisible").value = p.autoShowVisibleSec ?? 8;
-  $("#autoShowSurgeFactor").value = p.autoShowSurgeFactor ?? 3;
-  $("#autoShowMinRate").value = p.autoShowMinRate ?? 4;
-  $("#floatingReactions").checked = p.floatingReactions !== false;
-  $("#floatingReactionPath").value = p.floatingReactionPath ?? 100;
-  $("#floatingReactionDuration").value = p.floatingReactionDurationMs ?? 1400;
+  $("#autoShowWindow").value = p.autoShowWindowSec ?? 4;
+  $("#autoShowVisible").value = p.autoShowVisibleSec ?? 15;
+  $("#autoShowSurgeFactor").value = p.autoShowSurgeFactor ?? 2;
+  $("#autoShowMinRate").value = p.autoShowMinRate ?? 3;
+  $("#floatingReactions").checked = p.floatingReactions === true;
+  $("#floatingReactionPath").value = p.floatingReactionPath ?? 250;
+  $("#floatingReactionSize").value = p.floatingReactionSize ?? 48;
+  $("#floatingReactionDuration").value = p.floatingReactionDurationMs ?? 2000;
   $("#floatingReactionStartDelay").value = p.floatingReactionStartDelayMs ?? 1200;
+  syncFloatDirectionPill(p.floatingReactionDirection === "radial" ? "radial" : "center");
   $("#showViewers").checked = p.showViewers === true;
   $("#blockedWords").value = (p.blockedWords || []).join("\n");
   $("#extensionEnabled").checked = p.extensionEnabled !== false;
@@ -220,9 +224,29 @@ async function loadAllFields() {
   $("#emote7tv").checked = p.emote7tv !== false;
   $("#emoteBttv").checked = p.emoteBttv !== false;
   $("#emoteFfz").checked = p.emoteFfz !== false;
-  $("#textStyle").value = p.textStyle || "none";
+  if (typeof p.textShadowEnabled === "boolean") $("#textShadowEnabled").checked = p.textShadowEnabled;
+  else if (p.textStyle === "outline" || p.textStyle === "none") $("#textShadowEnabled").checked = false;
+  else $("#textShadowEnabled").checked = true;
+  if (typeof p.textOutlineEnabled === "boolean") $("#textOutlineEnabled").checked = p.textOutlineEnabled;
+  else $("#textOutlineEnabled").checked = p.textStyle === "outline";
   $("#boldText").checked = p.boldText === true;
+  const shadowPct = Math.max(0, Math.min(100, p.textShadowIntensity ?? 60));
+  $("#textShadowIntensity").value = shadowPct;
+  $("#textShadowIntensityVal").textContent = `${shadowPct}%`;
+  setRangeFill($("#textShadowIntensity"));
+  $("#textOutlineWidth").value = p.textOutlineWidth ?? 1;
+  syncTextStyleGating();
   syncHighlightGating();
+}
+function syncTextStyleGating() {
+  const gate = (rowSel, on) => {
+    const row = $(rowSel);
+    if (!row) return;
+    row.style.opacity = on ? "" : "0.5";
+    row.querySelectorAll("input, button").forEach((el) => { el.disabled = !on; });
+  };
+  gate("#textShadowRow", $("#textShadowEnabled").checked);
+  gate("#textOutlineRow", $("#textOutlineEnabled").checked);
 }
 // Emote highlights can run independently of the chat-activity wave (the markers just render with no
 // wave drawn behind them). Each dependent option is gated on whichever layer it actually affects.
@@ -263,7 +287,10 @@ function layoutModesValue(p) {
   if (e?.mode === "docked") return { default: "docked", theater: "docked", fullscreen: "docked" };
   return { ...LAYOUT_MODE_DEFAULTS };
 }
+function isKickHost(h) { return h ? /(^|\.)kick\.com$/.test(h) : false; }
+
 async function writeLayoutMode(layout, mode) {
+  if (layout === "fullscreen" && isKickHost(activeHost) && mode === "docked") mode = "overlay";
   const cur = await getPrefs();
   const sites = { ...(cur.sites || {}) };
   const entry = { ...(sites[activeHost] || {}) };
@@ -277,10 +304,16 @@ function hideNativeValue(p) {
   const hn = p.sites?.[activeHost]?.hideNative || {};
   const legacy = p.hideYoutubeChat === true;
   return {
-    default: typeof hn.default === "boolean" ? hn.default : legacy,
-    theater: typeof hn.theater === "boolean" ? hn.theater : false,
-    fullscreen: typeof hn.fullscreen === "boolean" ? hn.fullscreen : false
+    default: typeof hn.default === "boolean" ? hn.default : (legacy || HIDE_NATIVE_DEFAULTS.default),
+    theater: typeof hn.theater === "boolean" ? hn.theater : HIDE_NATIVE_DEFAULTS.theater,
+    fullscreen: typeof hn.fullscreen === "boolean" ? hn.fullscreen : HIDE_NATIVE_DEFAULTS.fullscreen
   };
+}
+function syncFloatDirectionPill(val) {
+  const pill = $("#floatingReactionDirectionPill");
+  if (!pill) return;
+  pill.querySelector('[data-val="radial"]')?.classList.toggle("active", val === "radial");
+  pill.querySelector('[data-val="center"]')?.classList.toggle("active", val === "center");
 }
 async function writeHideNative(layout, hide) {
   const cur = await getPrefs();
@@ -330,8 +363,28 @@ async function initSiteCard() {
   const lm = layoutModesValue(p);
   $("#modeDefault").value = lm.default;
   $("#modeTheater").value = lm.theater;
-  $("#modeFullscreen").value = lm.fullscreen;
+  await syncKickFullscreenMode(p, lm);
   syncNativeChatPills(p);
+}
+
+async function syncKickFullscreenMode(p, lm = layoutModesValue(p)) {
+  const isKick = isKickHost(activeHost);
+  const fsSel = $("#modeFullscreen");
+  const dockOpt = fsSel?.querySelector('option[value="docked"]');
+  if (dockOpt) {
+    dockOpt.hidden = isKick;
+    dockOpt.disabled = isKick;
+  }
+  $("#modeFullscreenKickHint").style.display = isKick && hostSupported ? "" : "none";
+  if (isKick && hostSupported) {
+    if (lm.fullscreen === "docked") {
+      await writeLayoutMode("fullscreen", "overlay");
+      lm = { ...lm, fullscreen: "overlay" };
+    }
+    fsSel.value = "overlay";
+  } else {
+    fsSel.value = lm.fullscreen;
+  }
 }
 
 $("#modeDefault").addEventListener("change", (e) => { if (activeHost && hostSupported) writeLayoutMode("default", e.target.value); });
@@ -397,39 +450,52 @@ $("#disconnectOnHide").addEventListener("change", async (e) => { await setPrefs(
 $("#markHighlightedMsgs").addEventListener("change", async (e) => { await setPrefs({ markHighlightedMsgs: e.target.checked }); });
 $("#autoShowHide").addEventListener("change", async (e) => { await setPrefs({ autoShowHide: e.target.checked }); });
 $("#saveAutoShowWindow").addEventListener("click", async () => {
-  const v = Math.max(1, Math.min(60, parseInt($("#autoShowWindow").value, 10) || 5));
+  const v = Math.max(1, Math.min(60, parseInt($("#autoShowWindow").value, 10) || 4));
   await setPrefs({ autoShowWindowSec: v });
   $("#autoShowWindow").value = v;
   flash($("#saveAutoShowWindow"));
 });
 $("#saveAutoShowVisible").addEventListener("click", async () => {
-  const v = Math.max(1, Math.min(120, parseInt($("#autoShowVisible").value, 10) || 8));
+  const v = Math.max(1, Math.min(120, parseInt($("#autoShowVisible").value, 10) || 15));
   await setPrefs({ autoShowVisibleSec: v });
   $("#autoShowVisible").value = v;
   flash($("#saveAutoShowVisible"));
 });
 $("#saveAutoShowSurgeFactor").addEventListener("click", async () => {
-  const v = Math.max(1.1, Math.min(20, parseFloat($("#autoShowSurgeFactor").value) || 3));
+  const v = Math.max(1.1, Math.min(20, parseFloat($("#autoShowSurgeFactor").value) || 2));
   await setPrefs({ autoShowSurgeFactor: v });
   $("#autoShowSurgeFactor").value = v;
   flash($("#saveAutoShowSurgeFactor"));
 });
 $("#saveAutoShowMinRate").addEventListener("click", async () => {
-  const v = Math.max(1, Math.min(100, parseInt($("#autoShowMinRate").value, 10) || 4));
+  const v = Math.max(1, Math.min(100, parseInt($("#autoShowMinRate").value, 10) || 3));
   await setPrefs({ autoShowMinRate: v });
   $("#autoShowMinRate").value = v;
   flash($("#saveAutoShowMinRate"));
 });
 $("#showViewers").addEventListener("change", async (e) => { await setPrefs({ showViewers: e.target.checked }); });
 $("#floatingReactions").addEventListener("change", async (e) => { await setPrefs({ floatingReactions: e.target.checked }); });
+$("#floatingReactionDirectionPill")?.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".split-pill-btn");
+  if (!btn) return;
+  const val = btn.dataset.val === "center" ? "center" : "radial";
+  syncFloatDirectionPill(val);
+  await setPrefs({ floatingReactionDirection: val });
+});
 $("#saveFloatingReactionPath").addEventListener("click", async () => {
-  const v = Math.max(40, Math.min(280, parseInt($("#floatingReactionPath").value, 10) || 100));
+  const v = Math.max(40, Math.min(500, parseInt($("#floatingReactionPath").value, 10) || 250));
   await setPrefs({ floatingReactionPath: v });
   $("#floatingReactionPath").value = v;
   flash($("#saveFloatingReactionPath"));
 });
+$("#saveFloatingReactionSize").addEventListener("click", async () => {
+  const v = Math.max(14, Math.min(112, parseInt($("#floatingReactionSize").value, 10) || 48));
+  await setPrefs({ floatingReactionSize: v });
+  $("#floatingReactionSize").value = v;
+  flash($("#saveFloatingReactionSize"));
+});
 $("#saveFloatingReactionDuration").addEventListener("click", async () => {
-  const v = Math.max(400, Math.min(4000, parseInt($("#floatingReactionDuration").value, 10) || 1400));
+  const v = Math.max(400, Math.min(4000, parseInt($("#floatingReactionDuration").value, 10) || 2000));
   await setPrefs({ floatingReactionDurationMs: v });
   $("#floatingReactionDuration").value = v;
   flash($("#saveFloatingReactionDuration"));
@@ -549,8 +615,27 @@ $("#blurRadius").addEventListener("input", async (e) => {
 $("#bgEnabled").addEventListener("change", async (e) => { await setPrefs({ bgEnabled: e.target.checked }); });
 $("#shadowEnabled").addEventListener("change", async (e) => { await setPrefs({ shadowEnabled: e.target.checked }); });
 $("#outlineEnabled").addEventListener("change", async (e) => { await setPrefs({ outlineEnabled: e.target.checked }); });
-$("#textStyle").addEventListener("change", async (e) => { await setPrefs({ textStyle: e.target.value }); });
+$("#textShadowEnabled").addEventListener("change", async (e) => {
+  await setPrefs({ textShadowEnabled: e.target.checked });
+  syncTextStyleGating();
+});
+$("#textOutlineEnabled").addEventListener("change", async (e) => {
+  await setPrefs({ textOutlineEnabled: e.target.checked });
+  syncTextStyleGating();
+});
 $("#boldText").addEventListener("change", async (e) => { await setPrefs({ boldText: e.target.checked }); });
+$("#textShadowIntensity").addEventListener("input", async (e) => {
+  const pct = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+  $("#textShadowIntensityVal").textContent = `${pct}%`;
+  setRangeFill(e.target);
+  await setPrefs({ textShadowIntensity: pct });
+});
+$("#saveTextOutlineWidth").addEventListener("click", async () => {
+  const v = Math.max(0.1, Math.min(2, parseFloat($("#textOutlineWidth").value) || 1));
+  await setPrefs({ textOutlineWidth: v });
+  $("#textOutlineWidth").value = v;
+  flash($("#saveTextOutlineWidth"));
+});
 $("#saveFontSize").addEventListener("click", async () => {
   const v = Math.max(10, Math.min(24, parseInt($("#fontSize").value, 10) || 13));
   await setPrefs({ fontSize: v });

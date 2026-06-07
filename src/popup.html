@@ -47,6 +47,7 @@
         <select id="modeTheater"><option value="overlay">Overlay</option><option value="docked">Docked</option></select></div>
       <div class="row" id="modeFullscreenRow"><span style="flex:1; font-size:13.5px; color:var(--fg-2);">Fullscreen</span>
         <select id="modeFullscreen"><option value="overlay">Overlay</option><option value="docked">Docked</option></select></div>
+      <div class="hint" id="modeFullscreenKickHint" style="display:none;">Kick fullscreen is overlay only — no chat column to dock into.</div>
     </div>
   </section>
 
@@ -158,9 +159,21 @@ word2"></textarea>
     </div>
     <div class="card" title="While chat is hidden, emotes from incoming messages float out of the show-chat bubble">
       <label class="row"><span>Floating reactions</span><input id="floatingReactions" type="checkbox" /></label>
-      <label style="margin-top:10px;" title="How far emotes travel from the bubble (pixels)">Reaction path length (px)</label>
+      <label style="margin-top:10px;" title="Emote max-height at a 1080p reference viewport; width follows the image aspect ratio; scales on larger screens">Emote size (px at 1080p)</label>
       <div class="row">
-        <input id="floatingReactionPath" type="number" min="40" max="280" step="10" />
+        <input id="floatingReactionSize" type="number" min="14" max="112" step="2" />
+        <button id="saveFloatingReactionSize">Save</button>
+      </div>
+      <label style="margin-top:10px;" title="Radial = random directions; Video center = drift toward the player center with ±45° variation">Float direction</label>
+      <div class="row">
+        <div class="split-pill" id="floatingReactionDirectionPill">
+          <button type="button" class="split-pill-btn" data-val="radial">Radial</button>
+          <button type="button" class="split-pill-btn active" data-val="center">Video center</button>
+        </div>
+      </div>
+      <label style="margin-top:10px;" title="Travel distance at a 1080p reference viewport; scales with screen size">Reaction path length (px at 1080p)</label>
+      <div class="row">
+        <input id="floatingReactionPath" type="number" min="40" max="500" step="10" />
         <button id="saveFloatingReactionPath">Save</button>
       </div>
       <label style="margin-top:10px;" title="How long each floating emote animation lasts (milliseconds)">Reaction duration (ms)</label>
@@ -264,35 +277,38 @@ word2"></textarea>
         <input id="highlightColorAppearance" type="color" />
       </div>
     </div>
-    <div class="card">
+    <div class="card" title="Overlay mode only — docked chat uses a fixed solid panel">
+      <label style="font-size:12px;color:var(--fg-2);margin-bottom:8px;display:block;">Background (overlay only)</label>
       <label class="row" title="Show a translucent background behind chat"><span>Background color</span><input id="bgEnabled" type="checkbox" /></label>
       <label class="row" title="Blur the video behind the chat background"><span>Background blur</span><input id="blurEnabled" type="checkbox" /></label>
       <label class="row" title="Cast a drop shadow under the chat panel"><span>Drop shadow (panel)</span><input id="shadowEnabled" type="checkbox" /></label>
       <label class="row" title="Draw a thin border around the chat panel"><span>Background outline</span><input id="outlineEnabled" type="checkbox" /></label>
-    </div>
-    <div class="card">
-      <label title="Add a drop shadow or outline to chat text for legibility over bright video">Text style</label>
-      <select id="textStyle" title="Add a drop shadow or outline to chat text for legibility over bright video">
-        <option value="none">None</option>
-        <option value="shadow">Drop shadow</option>
-        <option value="outline">Outline</option>
-      </select>
-      <label class="row"><span>Bold text</span><input id="boldText" type="checkbox" /></label>
-    </div>
-    <div class="card" title="Opacity of the chat background">
-      <div class="sliderhead"><label style="width:auto;">Background opacity</label><span class="val" id="opacityVal"></span></div>
+      <div class="sliderhead" style="margin-top:10px;"><label style="width:auto;">Background opacity</label><span class="val" id="opacityVal"></span></div>
       <input id="opacity" type="range" min="0" max="100" step="1" />
-    </div>
-    <div class="card" title="Strength of the background blur in pixels">
-      <div class="sliderhead"><label style="width:auto;">Background blur radius</label><span class="val" id="blurRadiusVal"></span></div>
+      <div class="sliderhead" style="margin-top:10px;"><label style="width:auto;">Background blur radius</label><span class="val" id="blurRadiusVal"></span></div>
       <input id="blurRadius" type="range" min="0" max="20" step="1" />
     </div>
-    <div class="card" title="Chat text size in pixels">
+    <div class="card" title="Applies in overlay and docked mode">
+      <label style="font-size:12px;color:var(--fg-2);margin-bottom:8px;display:block;">Text (overlay + docked)</label>
       <label>Font size (px)</label>
       <div class="row">
         <input id="fontSize" type="number" min="10" max="24" step="1" />
         <button id="saveFontSize">Save</button>
       </div>
+      <label class="row" style="margin-top:10px;"><span>Text drop shadow</span><input id="textShadowEnabled" type="checkbox" /></label>
+      <div id="textShadowRow">
+        <div class="sliderhead" style="margin-top:10px;"><label style="width:auto;">Shadow intensity</label><span class="val" id="textShadowIntensityVal"></span></div>
+        <input id="textShadowIntensity" type="range" min="0" max="100" step="1" />
+      </div>
+      <label class="row" style="margin-top:10px;"><span>Text outline</span><input id="textOutlineEnabled" type="checkbox" /></label>
+      <div id="textOutlineRow">
+        <label style="margin-top:10px;" title="Black outline thickness around chat text">Outline thickness (px)</label>
+        <div class="row">
+          <input id="textOutlineWidth" type="number" min="0.1" max="2" step="0.1" />
+          <button id="saveTextOutlineWidth">Save</button>
+        </div>
+      </div>
+      <label class="row" style="margin-top:10px;"><span>Bold text</span><input id="boldText" type="checkbox" /></label>
     </div>
   </section>
 

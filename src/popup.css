@@ -249,6 +249,13 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .sliderhead { display: flex; justify-content: space-between; align-items: baseline; width: 100%; }
 .sliderhead .val { font-size: 12px; font-weight: 600; font-family: var(--font-mono); color: var(--accent); }
+/* Full-width blocks inside flex-wrap cards (e.g. nested text-style controls). */
+.card > input[type="range"],
+#textShadowRow,
+#textOutlineRow {
+  width: 100%;
+  flex: 1 1 100%;
+}
 
 /* ---------- status / misc ---------- */
 .hint { font-size: 11.5px; color: var(--fg-3); line-height: 1.45; }

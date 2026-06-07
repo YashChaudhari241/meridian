@@ -45,6 +45,13 @@ export class TwitchIRC {
     if (this.ws?.readyState === 1) this.ws.send(`JOIN #${ch}`);
   }
 
+  leave() {
+    if (this.channel && this.ws?.readyState === 1) {
+      this.ws.send(`PART #${this.channel}`);
+    }
+    this.channel = null;
+  }
+
   say(text) {
     if (this.anonymous) return false;
     if (!this.channel || this.ws?.readyState !== 1) return false;
