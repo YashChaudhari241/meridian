@@ -1,4 +1,5 @@
 import { DEFAULT_MAPPINGS, DEFAULT_KICK_MAPPINGS } from "./mappings.js";
+import { TWITCH_CLIENT_ID } from "./config.js";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -37,8 +38,20 @@ const CHECK_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" s
 const EYE_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.94 10.94 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.94 10.94 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg>`;
 
 async function refreshStatus() {
-  const s = await send("AUTH_STATUS");
-  if (!s?.ok) return;
+  // Computed entirely in the popup (one local storage read) — deliberately NOT a message to the
+  // background service worker. Waking a cold MV3 SW can take seconds on a busy profile, and it
+  // was the last popup-open dependency on it; everything AUTH_STATUS returned derives from
+  // storage + config.js + chrome.identity.getRedirectURL(), all available here synchronously.
+  const o = await chrome.storage.local.get("meridian.oauth");
+  const stored = o["meridian.oauth"];
+  const connected = Boolean(stored?.accessToken);
+  const s = {
+    connected,
+    login: connected ? stored.login : null,
+    displayName: connected ? (stored.displayName || stored.login) : null,
+    clientIdSet: Boolean(TWITCH_CLIENT_ID),
+    redirectUri: chrome.identity.getRedirectURL()
+  };
   const chip = $("#headerStatus");
   if (s.connected) {
     const who = s.displayName || s.login;
@@ -183,20 +196,37 @@ async function loadAllFields() {
   $("#highlightTimeline").checked = p.highlightTimeline === true;
   $("#highlightEnabled").checked = p.highlightEnabled === true;
   $("#highlightAnchorLive").checked = p.highlightAnchorLive !== false;
-  // Per-channel threshold/window: scope to the channel the ACTIVE TAB is currently on (asked
-  // directly via a content-script message — the global `_activeChannel` storage key can be stale
-  // when several tabs are open). Fall back to the stored key, then to global.
-  let liveChannel = "";
-  try {
-    if (activeTab?.id) {
-      const r = await Promise.race([
-        chrome.tabs.sendMessage(activeTab.id, { type: "GET_ACTIVE_CHANNEL" }).catch(() => null),
-        timeout(250)
-      ]);
-      liveChannel = (r?.channel || "").toLowerCase();
-    }
-  } catch { /* no content script on this tab (e.g. not YouTube/Kick) */ }
-  const activeCh = liveChannel || (p._activeChannel || "").toLowerCase();
+  // Per-channel threshold/window: paint immediately from the stored `_activeChannel`, then let
+  // refreshLiveChannelFields() refine with the active tab's live channel when it answers. The
+  // old code awaited that round-trip (up to 250 ms) INSIDE loadAllFields, which held up every
+  // field below it and made the popup feel slow to fill in.
+  applyChannelScopedFields(p, (p._activeChannel || "").toLowerCase());
+  refreshLiveChannelFields(p); // fire-and-forget
+  $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
+  $("#highlightColor").value = p.highlightColor || "#b388ff";
+  $("#highlightColorAppearance").value = p.highlightColor || "#b388ff";
+  $("#highlightPersistEmotes").checked = p.highlightPersistEmotes !== false;
+  $("#highlightPersistDensity").checked = p.highlightPersistDensity !== false;
+  $("#emote7tv").checked = p.emote7tv !== false;
+  $("#emoteBttv").checked = p.emoteBttv !== false;
+  $("#emoteFfz").checked = p.emoteFfz !== false;
+  if (typeof p.textShadowEnabled === "boolean") $("#textShadowEnabled").checked = p.textShadowEnabled;
+  else if (p.textStyle === "outline" || p.textStyle === "none") $("#textShadowEnabled").checked = false;
+  else $("#textShadowEnabled").checked = true;
+  if (typeof p.textOutlineEnabled === "boolean") $("#textOutlineEnabled").checked = p.textOutlineEnabled;
+  else $("#textOutlineEnabled").checked = p.textStyle === "outline";
+  $("#boldText").checked = p.boldText === true;
+  const shadowPct = Math.max(0, Math.min(100, p.textShadowIntensity ?? 60));
+  $("#textShadowIntensity").value = shadowPct;
+  $("#textShadowIntensityVal").textContent = `${shadowPct}%`;
+  setRangeFill($("#textShadowIntensity"));
+  $("#textOutlineWidth").value = p.textOutlineWidth ?? 1;
+  syncTextStyleGating();
+  syncHighlightGating();
+}
+
+// Threshold/window inputs + labels, scoped to `activeCh` ("" = the global defaults).
+function applyChannelScopedFields(p, activeCh) {
   const perCh = activeCh ? p.highlightThresholds?.[activeCh] : undefined;
   if (activeCh) {
     $("#highlightThreshold").value = Math.max(3, (perCh ?? p.highlightThreshold ?? 5));
@@ -222,28 +252,28 @@ async function loadAllFields() {
     $("#windowLabel").textContent = "Emote highlight window (seconds)";
     $("#highlightWindowHint").textContent = "no channel active — editing the global default";
   }
-  $("#highlightOffset").value = p.highlightOffsetSec ?? 5;
-  $("#highlightColor").value = p.highlightColor || "#b388ff";
-  $("#highlightColorAppearance").value = p.highlightColor || "#b388ff";
-  $("#highlightPersistEmotes").checked = p.highlightPersistEmotes !== false;
-  $("#highlightPersistDensity").checked = p.highlightPersistDensity !== false;
-  $("#emote7tv").checked = p.emote7tv !== false;
-  $("#emoteBttv").checked = p.emoteBttv !== false;
-  $("#emoteFfz").checked = p.emoteFfz !== false;
-  if (typeof p.textShadowEnabled === "boolean") $("#textShadowEnabled").checked = p.textShadowEnabled;
-  else if (p.textStyle === "outline" || p.textStyle === "none") $("#textShadowEnabled").checked = false;
-  else $("#textShadowEnabled").checked = true;
-  if (typeof p.textOutlineEnabled === "boolean") $("#textOutlineEnabled").checked = p.textOutlineEnabled;
-  else $("#textOutlineEnabled").checked = p.textStyle === "outline";
-  $("#boldText").checked = p.boldText === true;
-  const shadowPct = Math.max(0, Math.min(100, p.textShadowIntensity ?? 60));
-  $("#textShadowIntensity").value = shadowPct;
-  $("#textShadowIntensityVal").textContent = `${shadowPct}%`;
-  setRangeFill($("#textShadowIntensity"));
-  $("#textOutlineWidth").value = p.textOutlineWidth ?? 1;
-  syncTextStyleGating();
-  syncHighlightGating();
 }
+
+// Ask the ACTIVE TAB for the channel it has actually joined (the global `_activeChannel` storage
+// key can be stale when several tabs are open) and repaint the channel-scoped fields if it
+// differs. Runs after first paint so the popup never waits on the tab round-trip.
+async function refreshLiveChannelFields(p) {
+  if (!activeTab?.id) return;
+  let live = "";
+  try {
+    const r = await Promise.race([
+      chrome.tabs.sendMessage(activeTab.id, { type: "GET_ACTIVE_CHANNEL" }).catch(() => null),
+      timeout(250)
+    ]);
+    live = (r?.channel || "").toLowerCase();
+  } catch { /* no content script on this tab (e.g. not YouTube/Kick) */ }
+  if (!live || live === (p._activeChannel || "").toLowerCase()) return;
+  // Don't clobber an input the user is already editing.
+  const a = document.activeElement;
+  if (a && (a.id === "highlightThreshold" || a.id === "highlightWindow")) return;
+  applyChannelScopedFields(p, live);
+}
+
 function syncTextStyleGating() {
   const gate = (rowSel, on) => {
     const row = $(rowSel);
@@ -789,13 +819,12 @@ $("#resetAll").addEventListener("click", async () => {
 
 // ---------- init ----------
 (async () => {
-  // Populate the config from storage FIRST (fast, local) so the panels fill in immediately.
-  // refreshStatus() messages the background service worker, which may be cold — don't block the
-  // visible settings on that round-trip; let it fill the status card in when it resolves.
+  // Everything here is local (storage + tabs.query) — popup open touches neither the network nor
+  // the background service worker (a cold MV3 SW wake can take seconds on a busy profile). The
+  // active-tab channel round-trip happens AFTER first paint (refreshLiveChannelFields).
   const [, o] = await Promise.all([detectActiveTab(), chrome.storage.local.get(UI_KEY)]);
   await activateTab(o[UI_KEY]?.tab || "general", false);
-  await Promise.all([loadAllFields(), initSiteCard()]);
-  refreshStatus(); // fire-and-forget — updates the status card asynchronously
+  await Promise.all([loadAllFields(), initSiteCard(), refreshStatus()]);
 })();
 
 chrome.storage.onChanged.addListener(async (changes, area) => {

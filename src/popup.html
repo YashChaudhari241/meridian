@@ -280,7 +280,8 @@ word2"></textarea>
     <div class="card" title="Overlay mode only — docked chat uses a fixed solid panel">
       <label style="font-size:12px;color:var(--fg-2);margin-bottom:8px;display:block;">Background (overlay only)</label>
       <label class="row" title="Show a translucent background behind chat"><span>Background color</span><input id="bgEnabled" type="checkbox" /></label>
-      <label class="row" title="Blur the video behind the chat background"><span>Background blur</span><input id="blurEnabled" type="checkbox" /></label>
+      <label class="row" title="Blur the video behind the chat background. GPU-heavy: blurring over a playing video can drop video frames (worst in fullscreen) — turn off if playback feels choppy"><span>Background blur</span><input id="blurEnabled" type="checkbox" /></label>
+      <div class="hint" style="margin:-2px 0 6px;">⚠ Blur is GPU-heavy: it re-blurs the video every frame and can cause dropped frames / choppy playback</div>
       <label class="row" title="Cast a drop shadow under the chat panel"><span>Drop shadow (panel)</span><input id="shadowEnabled" type="checkbox" /></label>
       <label class="row" title="Draw a thin border around the chat panel"><span>Background outline</span><input id="outlineEnabled" type="checkbox" /></label>
       <div class="sliderhead" style="margin-top:10px;"><label style="width:auto;">Background opacity</label><span class="val" id="opacityVal"></span></div>
