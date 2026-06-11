@@ -78,9 +78,11 @@
   gap: 5px;
   padding: 4px 5px;
   box-sizing: border-box;
+  /* No backdrop-filter here: ANY blurred element composited over the video knocks it off the
+     cheap presentation path and re-blurs the region every video frame (measured ~10%+ dropped
+     frames in fullscreen from one tiny blurred pill). The bg is 92% opaque — blur added nothing
+     visible. Only .meridian-bg may blur, behind the explicit user toggle. */
   background: rgba(13, 13, 16, 0.92);
-  backdrop-filter: blur(12px) saturate(1.3);
-  -webkit-backdrop-filter: blur(12px) saturate(1.3);
   z-index: 2;
   opacity: 0;
   transition: opacity 160ms cubic-bezier(.2,.6,.2,1);
@@ -305,6 +307,7 @@
   height: 6px;
   border-radius: 50%;
   background: rgb(var(--banner-color));
+  box-shadow: 0 0 6px rgba(var(--banner-color), 0.55);
   animation: meridian-banner-pulse 1.1s ease-in-out infinite;
 }
 .meridian-banner-shimmer {
@@ -334,9 +337,13 @@
   pointer-events: none;
   will-change: transform;
 }
+/* Compositor-only pulse (opacity/transform). Animating box-shadow here forced a paint of the
+   overlay layer every frame for the whole time the connecting/reconnecting banner was up —
+   over the video that meant visible frame drops exactly while "Connecting…" showed. The dot
+   keeps a static glow instead. */
 @keyframes meridian-banner-pulse {
   0%, 100% { opacity: 0.4; transform: scale(0.82); }
-  50% { opacity: 1; transform: scale(1.15); box-shadow: 0 0 6px rgba(var(--banner-color), 0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
 }
 @keyframes meridian-banner-shimmer {
   0% { transform: translateX(-120%); }
@@ -353,12 +360,14 @@
   align-items: center;
   gap: 4px;
   padding: 3px 7px 3px 5px;
-  background: rgba(8, 8, 11, 0.52);
+  /* Solid-ish fill instead of frosted glass: this pill sits over the video whenever the live
+     viewer count is on, and its backdrop-filter alone cost ~12% dropped video frames in
+     fullscreen (forces per-frame readback+blur of the video region). Slightly higher opacity
+     keeps the count legible without the blur. */
+  background: rgba(8, 8, 11, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.11);
   color: rgba(255, 255, 255, 0.62);
   border-radius: 999px;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 10.5px;
   font-weight: 600;
@@ -612,17 +621,16 @@
   top: 80px;
   right: 24px;
   z-index: 2147483601;
-  /* Translucent frosted bubble: barely-there fill that lets the video read through, the blur keeps
-     the icon legible over busy footage. Opacity ramps up on hover so it's grabbable. */
-  background: rgba(18, 16, 28, 0.28);
+  /* Translucent bubble — deliberately NO backdrop-filter: while hidden the bubble floats over
+     the video, and a blurred element over a video costs dropped frames every frame. A slightly
+     deeper fill keeps the icon legible over busy footage instead. */
+  background: rgba(18, 16, 28, 0.55);
   color: rgba(198, 176, 255, 0.82);
   border: 1px solid rgba(130, 87, 255, 0.28);
   border-radius: 999px;
   width: 32px;
   height: 32px;
   cursor: pointer;
-  backdrop-filter: blur(8px) saturate(1.3);
-  -webkit-backdrop-filter: blur(8px) saturate(1.3);
   box-shadow: 0 6px 20px rgba(0,0,0,0.30);
   display: none;
   align-items: center;
@@ -759,8 +767,6 @@ ytd-live-chat-frame.meridian-dock-anchor[hide-chat-frame] {
 .meridian-docked .meridian-header,
 .meridian-docked .meridian-input-wrap {
   background: #1B1B20;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 /* Header sits directly under the tab bar — no top rounding of its own. */
 .meridian-docked .meridian-header {
