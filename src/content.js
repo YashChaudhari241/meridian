@@ -3309,6 +3309,14 @@
   function prepareNativeChatForLayout(layout) {
     if (!SITE.nativeChatExists?.()) return;
     const shouldOpen = nativeChatShouldOpenForLayout(layout);
+    // This runs on the fullscreen-button *pointerdown*, before YouTube processes the actual
+    // fullscreen toggle. Only proactively COLLAPSE native chat here (the half-width fullscreen /
+    // stale chat-column artifact fix needs chat gone before YouTube computes fullscreen). Never
+    // proactively OPEN it: clicking YouTube's show-hide button while still fullscreen re-lays-out the
+    // player and swallows the same click's fullscreen-exit, so exiting fullscreen to a docked layout
+    // would just flash the chat open/closed and stay fullscreen. Opening is deferred to the
+    // post-`fullscreenchange` reconcile / applyMode once the layout has actually settled.
+    if (shouldOpen) return;
     if (SITE.isNativeChatOpen?.() !== shouldOpen) {
       if (setNativeChat(shouldOpen, { optimistic: true })) {
         scheduleNativeChatReconcile(FS_CHANGE_QUIET_MS + 120);
