@@ -443,6 +443,22 @@
   padding-right: 8px;
   border-radius: 2px;
 }
+
+/* Alternating row colors (Appearance tab) */
+.meridian-root.meridian-zebra .meridian-msg:nth-child(even) {
+  background: rgba(255, 255, 255, 0.05);
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: 2px;
+}
+.meridian-root.meridian-zebra .meridian-msg.meridian-mention:nth-child(even) {
+  background: rgba(255, 64, 64, 0.16);
+}
+.meridian-root.meridian-zebra .meridian-msg.meridian-highlighted:not(.meridian-mention):nth-child(even) {
+  background: rgba(145, 70, 255, 0.16);
+}
+
 .meridian-msg.notice { opacity: 0.75; font-style: italic; }
 /* /me (CTCP ACTION) messages render italic, like other chat clients. */
 .meridian-msg.action .meridian-text { font-style: italic; }
