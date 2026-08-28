@@ -106,6 +106,7 @@
     bgEnabled: true,
     shadowEnabled: false,
     outlineEnabled: true,        // 1px border around the chat background panel
+    zebraEnabled: false,
     boundToPlayer: true,
     playerAnchor: null,
     extensionEnabled: true,      // master switch — turn Meridian off everywhere
@@ -1690,6 +1691,7 @@
         || next.bgEnabled !== prefs.bgEnabled
         || next.shadowEnabled !== prefs.shadowEnabled
         || next.outlineEnabled !== prefs.outlineEnabled
+        || next.zebraEnabled !== prefs.zebraEnabled
         || next.boldText !== prefs.boldText
         || next.textShadowEnabled !== prefs.textShadowEnabled
         || next.textOutlineEnabled !== prefs.textOutlineEnabled
@@ -3199,6 +3201,7 @@
     root.classList.toggle("no-bg", prefs.bgEnabled === false);
     root.classList.toggle("no-shadow", prefs.shadowEnabled === false);
     root.classList.toggle("no-outline", prefs.outlineEnabled === false);
+    root.classList.toggle("meridian-zebra", prefs.zebraEnabled === true);
     root.classList.toggle("text-shadow", textShadowEnabled());
     root.classList.toggle("text-outline", textOutlineEnabled());
     root.classList.toggle("text-bold", prefs.boldText === true);

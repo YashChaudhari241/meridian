@@ -105,7 +105,7 @@ const defaults = {
   chatDelaySec: 0, updateFrequencyMs: 0, autoscroll: true,
   hotkeyToggle: "", hotkeyFocus: "", hotkeyPauseScroll: "",
   opacity: 0.51, fontSize: 13, blurRadius: 0, maxMessages: 300,
-  blurEnabled: false, bgEnabled: true, shadowEnabled: false, outlineEnabled: true,
+  blurEnabled: false, bgEnabled: true, shadowEnabled: false, outlineEnabled: true, zebraEnabled: false,
   boundToPlayer: true,
   blockedWords: [], hideDeleted: true,
   hidden: false, extensionEnabled: true,
@@ -171,6 +171,7 @@ async function loadAllFields() {
   $("#bgEnabled").checked = p.bgEnabled !== false;
   $("#shadowEnabled").checked = p.shadowEnabled === true;
   $("#outlineEnabled").checked = p.outlineEnabled !== false;
+  $("#zebraEnabled").checked = p.zebraEnabled === true;
   $("#hotkeyToggle").value = p.hotkeyToggle || "";
   $("#hotkeyFocus").value = p.hotkeyFocus || "";
   $("#hotkeyPauseScroll").value = p.hotkeyPauseScroll || "";
@@ -651,6 +652,7 @@ $("#blurRadius").addEventListener("input", async (e) => {
 $("#bgEnabled").addEventListener("change", async (e) => { await setPrefs({ bgEnabled: e.target.checked }); });
 $("#shadowEnabled").addEventListener("change", async (e) => { await setPrefs({ shadowEnabled: e.target.checked }); });
 $("#outlineEnabled").addEventListener("change", async (e) => { await setPrefs({ outlineEnabled: e.target.checked }); });
+$("#zebraEnabled").addEventListener("change", async (e) => { await setPrefs({ zebraEnabled: e.target.checked }); });
 $("#textShadowEnabled").addEventListener("change", async (e) => {
   await setPrefs({ textShadowEnabled: e.target.checked });
   syncTextStyleGating();
